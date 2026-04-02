@@ -3,21 +3,19 @@ const fs = require('fs');
 const path = require('path');
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
+const ffmpeg = require('fluent-ffmpeg');
+const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
+ffmpeg.setFfmpegPath(ffmpegPath);
 
 // =========================
-// CONFIGURACIÓN BÁSICA
+// CONFIGURACIÓN
 // =========================
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 
-if (!TELEGRAM_TOKEN) {
-  console.error('FALTA TELEGRAM_TOKEN en las variables de entorno');
-  process.exit(1);
-}
-
-if (!OPENROUTER_API_KEY) {
-  console.error('FALTA OPENROUTER_API_KEY en las variables de entorno');
+if (!TELEGRAM_TOKEN || !OPENROUTER_API_KEY) {
+  console.error("Faltan variables de entorno.");
   process.exit(1);
 }
 
@@ -27,114 +25,115 @@ const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 // MEMORIA POR USUARIO
 // =========================
 
-const MEMORY_FILE = path.join(__dirname, 'memory.json');
+const MEMORY_FILE = path.join(__dirname, "memory.json");
 let memory = {};
 
-// Cargar memoria desde disco (si existe)
 function loadMemory() {
   try {
     if (fs.existsSync(MEMORY_FILE)) {
-      const raw = fs.readFileSync(MEMORY_FILE, 'utf8');
-      memory = JSON.parse(raw);
-      console.log('Memoria cargada desde memory.json');
-    } else {
-      memory = {};
-      console.log('No había memoria previa, empezando limpio.');
+      memory = JSON.parse(fs.readFileSync(MEMORY_FILE, "utf8"));
     }
-  } catch (err) {
-    console.error('Error cargando memoria:', err);
+  } catch {
     memory = {};
   }
 }
 
-// Guardar memoria en disco
 function saveMemory() {
-  try {
-    fs.writeFileSync(MEMORY_FILE, JSON.stringify(memory, null, 2), 'utf8');
-  } catch (err) {
-    console.error('Error guardando memoria:', err);
-  }
+  fs.writeFileSync(MEMORY_FILE, JSON.stringify(memory, null, 2));
 }
 
-// Añadir mensaje a la memoria de un usuario
 function addToMemory(userId, role, content) {
-  if (!memory[userId]) {
-    memory[userId] = [];
-  }
-
-  memory[userId].push({
-    role,
-    content,
-    ts: Date.now()
-  });
-
-  // Limitar a las últimas 20 entradas por usuario
-  if (memory[userId].length > 20) {
-    memory[userId] = memory[userId].slice(-20);
-  }
-
+  if (!memory[userId]) memory[userId] = [];
+  memory[userId].push({ role, content, ts: Date.now() });
+  if (memory[userId].length > 20) memory[userId] = memory[userId].slice(-20);
   saveMemory();
 }
 
-// Obtener historial de un usuario en formato para OpenRouter
 function getUserHistory(userId) {
-  if (!memory[userId]) return [];
-
-  return memory[userId].map(m => ({
-    role: m.role,
-    content: m.content
-  }));
+  return memory[userId] || [];
 }
 
 // =========================
-// LLAMADA A OPENROUTER
+// OPENROUTER
 // =========================
 
 async function askOpenRouter(userId, userMessage) {
-  const history = getUserHistory(userId);
-
-  const systemPrompt = `
-Eres Ibrabot, un asistente personal de Brahim.
-Recuerdas el contexto de cada usuario según su historial.
-Respondes de forma clara, útil y directa.
-Si el usuario habla en español, respondes en español.
-Si habla en otro idioma, respondes en ese idioma.
-No menciones que usas OpenRouter ni detalles técnicos.
-  `.trim();
-
   const messages = [
-    { role: 'system', content: systemPrompt },
-    ...history,
-    { role: 'user', content: userMessage }
+    {
+      role: "system",
+      content: `
+Eres Ibrabot, un asistente personal avanzado.
+Recuerdas el historial del usuario.
+Respondes claro, útil y en su idioma.
+No menciones detalles técnicos.
+`.trim()
+    },
+    ...getUserHistory(userId),
+    { role: "user", content: userMessage }
   ];
 
   try {
     const response = await axios.post(
-      'https://openrouter.ai/api/v1/chat/completions',
+      "https://openrouter.ai/api/v1/chat/completions",
       {
-        model: 'openai/gpt-4o-mini',
+        model: "openai/gpt-4o-mini",
         messages
       },
       {
         headers: {
-          'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': 'https://github.com/brahimchiguar646-pixel/ibrabot',
-          'X-Title': 'Ibrabot Telegram Bot'
-        },
-        timeout: 30000
+          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json"
+        }
       }
     );
 
-    const reply =
-      response.data?.choices?.[0]?.message?.content ||
-      'Lo siento, no pude generar una respuesta ahora mismo.';
-
-    return reply;
+    return response.data?.choices?.[0]?.message?.content || "No pude responder.";
   } catch (err) {
-    console.error('Error llamando a OpenRouter:', err.response?.data || err.message);
-    return 'Ha ocurrido un error al pensar la respuesta. Intenta de nuevo en un momento.';
+    console.error("Error OpenRouter:", err.message);
+    return "Error procesando tu mensaje.";
   }
+}
+
+// =========================
+// VOZ → TEXTO (WHISPER)
+// =========================
+
+async function transcribeVoice(fileUrl) {
+  const oggPath = path.join(__dirname, "voice.ogg");
+  const mp3Path = path.join(__dirname, "voice.mp3");
+
+  const audio = await axios.get(fileUrl, { responseType: "arraybuffer" });
+  fs.writeFileSync(oggPath, audio.data);
+
+  await new Promise((resolve, reject) => {
+    ffmpeg(oggPath)
+      .toFormat("mp3")
+      .save(mp3Path)
+      .on("end", resolve)
+      .on("error", reject);
+  });
+
+  const base64Audio = fs.readFileSync(mp3Path).toString("base64");
+
+  const whisper = await axios.post(
+    "https://openrouter.ai/api/v1/audio/transcriptions",
+    {
+      model: "openai/whisper-1",
+      file: base64Audio,
+      format: "mp3"
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json"
+      }
+    }
+  );
+
+  fs.unlinkSync(oggPath);
+  fs.unlinkSync(mp3Path);
+
+  return whisper.data.text;
 }
 
 // =========================
@@ -143,37 +142,48 @@ No menciones que usas OpenRouter ni detalles técnicos.
 
 loadMemory();
 
-bot.on('message', async (msg) => {
+bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  const text = msg.text;
 
-  // Ignorar mensajes sin texto (luego añadimos voz, fotos, etc.)
-  if (!text) {
-    return;
+  // -------------------------
+  // MENSAJES DE VOZ
+  // -------------------------
+  if (msg.voice) {
+    try {
+      await bot.sendChatAction(chatId, "typing");
+
+      const file = await bot.getFile(msg.voice.file_id);
+      const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${file.file_path}`;
+
+      const text = await transcribeVoice(fileUrl);
+
+      addToMemory(userId, "user", text);
+
+      const reply = await askOpenRouter(userId, text);
+      addToMemory(userId, "assistant", reply);
+
+      return bot.sendMessage(chatId, reply);
+    } catch (err) {
+      console.error("Error voz:", err);
+      return bot.sendMessage(chatId, "Error procesando tu mensaje de voz.");
+    }
   }
 
-  console.log(`Mensaje de ${userId}: ${text}`);
+  // -------------------------
+  // MENSAJES DE TEXTO
+  // -------------------------
+  if (msg.text) {
+    addToMemory(userId, "user", msg.text);
 
-  // Guardar mensaje del usuario en memoria
-  addToMemory(userId, 'user', text);
+    await bot.sendChatAction(chatId, "typing");
 
-  // Indicador de "escribiendo..."
-  await bot.sendChatAction(chatId, 'typing');
+    const reply = await askOpenRouter(userId, msg.text);
 
-  // Pedir respuesta inteligente a OpenRouter
-  const reply = await askOpenRouter(userId, text);
+    addToMemory(userId, "assistant", reply);
 
-  // Guardar respuesta del bot en memoria
-  addToMemory(userId, 'assistant', reply);
-
-  // Enviar respuesta al usuario
-  bot.sendMessage(chatId, reply, {
-    parse_mode: 'Markdown'
-  }).catch(err => {
-    console.error('Error enviando mensaje a Telegram:', err.message);
-  });
+    return bot.sendMessage(chatId, reply);
+  }
 });
 
-console.log('Ibrabot está corriendo con memoria por usuario y respuestas inteligentes.');
-
+console.log("Ibrabot listo con memoria, IA y voz.");
