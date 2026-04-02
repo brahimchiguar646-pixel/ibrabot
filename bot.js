@@ -23,7 +23,7 @@ if (!TELEGRAM_TOKEN || !OPENROUTER_API_KEY) {
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
 // =========================
-// BASE DE DATOS SQLITE (CON SEGURIDAD)
+// BASE DE DATOS SQLITE (MEMORIA PROFUNDA)
 // =========================
 
 let db;
@@ -37,46 +37,56 @@ try {
   console.error("❌ Error crítico con SQLite:", err.message);
 }
 
-// Crear tabla segura
+// Tabla de memoria profunda organizada
 db.run(`
-  CREATE TABLE IF NOT EXISTS memory (
+  CREATE TABLE IF NOT EXISTS deep_memory (
     userId TEXT,
+    category TEXT,
     key TEXT,
-    value TEXT
+    value TEXT,
+    updatedAt INTEGER
   )
 `);
 
-// Guardar memoria permanente
-function saveFact(userId, key, value) {
+// Guardar o actualizar un hecho (upsert)
+function saveDeepFact(userId, category, key, value) {
   try {
+    const now = Date.now();
     db.run(
-      `INSERT INTO memory (userId, key, value) VALUES (?, ?, ?)`,
-      [userId, key, value]
+      `
+      INSERT INTO deep_memory (userId, category, key, value, updatedAt)
+      VALUES (?, ?, ?, ?, ?)
+      `,
+      [userId, category, key, value, now]
     );
   } catch (err) {
-    console.error("❌ Error guardando memoria:", err.message);
+    console.error("❌ Error guardando memoria profunda:", err.message);
   }
 }
 
-// Leer memoria permanente
-function loadFacts(userId) {
+// Leer memoria profunda completa del usuario
+function loadDeepProfile(userId) {
   return new Promise((resolve) => {
     try {
       db.all(
-        `SELECT key, value FROM memory WHERE userId = ?`,
+        `SELECT category, key, value FROM deep_memory WHERE userId = ?`,
         [userId],
         (err, rows) => {
-          if (err) return resolve({});
+          if (err) {
+            console.error("❌ Error leyendo memoria profunda:", err.message);
+            return resolve({});
+          }
           const profile = {};
           rows.forEach(r => {
-            if (!profile[r.key]) profile[r.key] = [];
-            profile[r.key].push(r.value);
+            if (!profile[r.category]) profile[r.category] = {};
+            if (!profile[r.category][r.key]) profile[r.category][r.key] = [];
+            profile[r.category][r.key].push(r.value);
           });
           resolve(profile);
         }
       );
     } catch (err) {
-      console.error("❌ Error leyendo memoria:", err.message);
+      console.error("❌ Error leyendo memoria profunda:", err.message);
       resolve({});
     }
   });
@@ -150,7 +160,7 @@ function isSpam(userId) {
 }
 
 // =========================
-// INTERPRETACIÓN DE TEXTO (CON SEGURIDAD)
+// INTERPRETACIÓN DE TEXTO
 // =========================
 
 async function interpretarTexto(textoOriginal) {
@@ -164,7 +174,7 @@ async function interpretarTexto(textoOriginal) {
             role: "system",
             content: `
 Eres un módulo de corrección inteligente.
-Corrige errores, interpreta frases incompletas y devuelve el texto claro.
+Corriges errores, interpretas frases incompletas y devuelves el texto claro.
 No expliques nada.
 `.trim()
           },
@@ -188,22 +198,101 @@ No expliques nada.
 }
 
 // =========================
-// OPENROUTER (CON REINTENTOS)
+// EXTRACCIÓN DE HECHOS (MEMORIA PROFUNDA)
+// =========================
+
+async function analizarYGuardarHechos(userId, texto) {
+  try {
+    const response = await axios.post(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        model: "openai/gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: `
+Eres un módulo de análisis de memoria personal.
+Tu tarea:
+- Leer el mensaje del usuario.
+- Extraer información importante sobre su vida, gustos, proyectos, rutinas, personas, objetivos, lugares, etc.
+- Clasificar cada hecho en una categoría.
+- Devolver SOLO un JSON con este formato:
+
+{
+  "facts": [
+    {
+      "category": "personas|gustos|proyectos|rutinas|lugares|tareas|objetivos|preferencias|otros",
+      "key": "etiqueta_corta_en_snake_case",
+      "value": "texto claro con el hecho"
+    }
+  ]
+}
+
+No expliques nada, no añadas texto fuera del JSON.
+`.trim()
+          },
+          {
+            role: "user",
+            content: texto
+          }
+        ]
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        timeout: 20000
+      }
+    );
+
+    const raw = response.data.choices[0].message.content.trim();
+
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      console.error("⚠️ No se pudo parsear JSON de memoria profunda.");
+      return;
+    }
+
+    if (!parsed.facts || !Array.isArray(parsed.facts)) return;
+
+    for (const fact of parsed.facts) {
+      if (!fact.category || !fact.key || !fact.value) continue;
+      saveDeepFact(userId, fact.category, fact.key, fact.value);
+    }
+  } catch (err) {
+    console.error("⚠️ Error analizando hechos:", err.message);
+  }
+}
+
+// =========================
+// OPENROUTER (USA MEMORIA PROFUNDA)
 // =========================
 
 async function askOpenRouter(userId, userMessage) {
-  const profile = await loadFacts(userId);
+  const deepProfile = await loadDeepProfile(userId);
 
   const messages = [
     {
       role: "system",
       content: `
 Eres Ibrabot, un asistente personal avanzado.
-Tienes memoria permanente del usuario.
-Usa esa memoria para responder mejor.
+Tienes memoria profunda y organizada del usuario.
+Debes usar esa memoria para:
+- Recordar personas importantes
+- Recordar gustos y preferencias
+- Recordar proyectos y objetivos
+- Recordar rutinas y lugares importantes
+- Adaptar tus respuestas a su vida real
+No inventes datos nuevos sobre el usuario, solo usa lo que está en la memoria.
 `.trim()
     },
-    { role: "system", content: `Datos del usuario: ${JSON.stringify(profile)}` },
+    {
+      role: "system",
+      content: `Memoria profunda del usuario (JSON): ${JSON.stringify(deepProfile)}`
+    },
     ...getUserHistory(userId),
     { role: "user", content: userMessage }
   ];
@@ -227,13 +316,12 @@ Usa esa memoria para responder mejor.
     return response.data.choices[0].message.content;
   } catch (err) {
     console.error("⚠️ Error OpenRouter:", err.message);
-
     return "Estoy teniendo un pequeño problema técnico, pero sigo aquí contigo.";
   }
 }
 
 // =========================
-// VOZ → TEXTO (CON SEGURIDAD)
+// VOZ → TEXTO
 // =========================
 
 async function transcribeVoice(fileUrl) {
@@ -280,7 +368,7 @@ async function transcribeVoice(fileUrl) {
 }
 
 // =========================
-// MANEJO DE MENSAJES (A PRUEBA DE FALLOS)
+// MANEJO DE MENSAJES
 // =========================
 
 bot.on("message", async (msg) => {
@@ -299,22 +387,24 @@ bot.on("message", async (msg) => {
       const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${file.file_path}`;
       const text = await transcribeVoice(fileUrl);
 
-      const textoInterpretado = await interpretarTexto(text);
-      const reply = await askOpenRouter(userId, textoInterpretado);
+      if (!text) return;
 
-      addToMemory(userId, "user", text);
+      const textoInterpretado = await interpretarTexto(text);
+      await analizarYGuardarHechos(userId, textoInterpretado);
+
+      addToMemory(userId, "user", textoInterpretado);
+      const reply = await askOpenRouter(userId, textoInterpretado);
       addToMemory(userId, "assistant", reply);
 
       return bot.sendMessage(chatId, reply);
     }
 
     if (msg.text) {
-      extractFacts(userId, msg.text);
-      addToMemory(userId, "user", msg.text);
-
       const textoInterpretado = await interpretarTexto(msg.text);
-      const reply = await askOpenRouter(userId, textoInterpretado);
+      await analizarYGuardarHechos(userId, textoInterpretado);
 
+      addToMemory(userId, "user", textoInterpretado);
+      const reply = await askOpenRouter(userId, textoInterpretado);
       addToMemory(userId, "assistant", reply);
 
       return bot.sendMessage(chatId, reply);
@@ -324,4 +414,4 @@ bot.on("message", async (msg) => {
   }
 });
 
-console.log("🛡️ Ibrabot listo con ESTABILIDAD TOTAL (Paso 1 completado).");
+console.log("🧠 Ibrabot listo con MEMORIA PROFUNDA ORGANIZADA (Paso 2).");
