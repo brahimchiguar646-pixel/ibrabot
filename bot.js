@@ -47,7 +47,6 @@ db.run(`
   )
 `);
 
-// Guardar hecho
 function saveDeepFact(userId, category, key, value) {
   try {
     const now = Date.now();
@@ -63,7 +62,6 @@ function saveDeepFact(userId, category, key, value) {
   }
 }
 
-// Cargar perfil profundo
 function loadDeepProfile(userId) {
   return new Promise((resolve) => {
     try {
@@ -92,7 +90,138 @@ function loadDeepProfile(userId) {
 }
 
 // =========================
-// HISTORIAL CORTO (CONTEXT0)
+// HISTORIAL CORTO
+// =========================
+
+const MEMORY_FILE = path.join(__dirname, "memory.json");
+let memory = {};
+
+try {
+  if (fs.existsSync(MEMORY_FILE)) {
+    memory = JSON.parse(fs.readFileSync(MEMORY_FILE, "utf8"));
+  }
+} catch {
+  memory = {};
+}
+
+function saveMemory() {
+  try {
+    fs.writeFileSync(MEMORY_FILE, JSON.stringify(memory, null, 2));
+  } catch (err) {
+    console.error("❌ Error guardando historial:", err.message);
+  }
+}
+
+function addToMemory(userId, role, content) {
+  try {
+    if (!memory[userId]) memory[userId] = [];
+    memory[userId].push({ role, content, ts: Date.now() });
+    if (memory[userId].length > 15) memory[userId] = memory[userId].slice(-15);
+    saveMemory();
+  } catch (err) {
+    console.error("❌ Error añadiendo al historial:", err.message);
+  }
+}
+
+function getUserHistory(userId) {
+  return memory[userId] || [];
+}
+
+// =========================
+// ANTI‑SPAM
+require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
+const TelegramBot = require('node-telegram-bot-api');
+const axios = require('axios');
+const sqlite3 = require('sqlite3').verbose();
+const ffmpeg = require('fluent-ffmpeg');
+const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
+ffmpeg.setFfmpegPath(ffmpegPath);
+
+// =========================
+// CONFIGURACIÓN
+// =========================
+
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+
+if (!TELEGRAM_TOKEN || !OPENROUTER_API_KEY) {
+  console.error("❌ ERROR: Faltan variables de entorno.");
+  process.exit(1);
+}
+
+const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
+
+// =========================
+// SQLITE: MEMORIA PROFUNDA
+// =========================
+
+let db;
+
+try {
+  db = new sqlite3.Database('memory.db', (err) => {
+    if (err) console.error("❌ Error abriendo SQLite:", err.message);
+    else console.log("📦 SQLite cargado correctamente.");
+  });
+} catch (err) {
+  console.error("❌ Error crítico con SQLite:", err.message);
+}
+
+db.run(`
+  CREATE TABLE IF NOT EXISTS deep_memory (
+    userId TEXT,
+    category TEXT,
+    key TEXT,
+    value TEXT,
+    updatedAt INTEGER
+  )
+`);
+
+function saveDeepFact(userId, category, key, value) {
+  try {
+    const now = Date.now();
+    db.run(
+      `
+      INSERT INTO deep_memory (userId, category, key, value, updatedAt)
+      VALUES (?, ?, ?, ?, ?)
+      `,
+      [userId, category, key, value, now]
+    );
+  } catch (err) {
+    console.error("❌ Error guardando memoria profunda:", err.message);
+  }
+}
+
+function loadDeepProfile(userId) {
+  return new Promise((resolve) => {
+    try {
+      db.all(
+        `SELECT category, key, value FROM deep_memory WHERE userId = ?`,
+        [userId],
+        (err, rows) => {
+          if (err) {
+            console.error("❌ Error leyendo memoria profunda:", err.message);
+            return resolve({});
+          }
+          const profile = {};
+          rows.forEach(r => {
+            if (!profile[r.category]) profile[r.category] = {};
+            if (!profile[r.category][r.key]) profile[r.category][r.key] = [];
+            profile[r.category][r.key].push(r.value);
+          });
+          resolve(profile);
+        }
+      );
+    } catch (err) {
+      console.error("❌ Error leyendo memoria profunda:", err.message);
+      resolve({});
+    }
+  });
+}
+
+// =========================
+// HISTORIAL CORTO
 // =========================
 
 const MEMORY_FILE = path.join(__dirname, "memory.json");
@@ -176,11 +305,8 @@ async function interpretarTexto(textoOriginal) {
             role: "system",
             content: `
 Eres un módulo de normalización de texto.
-Tareas:
-- Corregir errores de escritura.
-- Completar frases cortas o mal escritas.
-- Mantener el mismo idioma del usuario.
-Devuelves SOLO el texto corregido, sin explicaciones.
+Corriges errores y devuelves el texto claro.
+No expliques nada.
 `.trim()
           },
           { role: "user", content: trimmed }
@@ -220,26 +346,14 @@ async function analizarYGuardarHechos(userId, texto) {
             role: "system",
             content: `
 Eres un módulo de memoria personal.
-Lees el mensaje del usuario y extraes SOLO hechos útiles sobre su vida.
-Clasifícalos en categorías:
-- personas
-- gustos
-- proyectos
-- rutinas
-- lugares
-- tareas
-- objetivos
-- preferencias
-- otros
-
-Devuelves SOLO un JSON con este formato:
+Extraes hechos importantes y devuelves SOLO un JSON:
 
 {
   "facts": [
     {
       "category": "personas|gustos|proyectos|rutinas|lugares|tareas|objetivos|preferencias|otros",
-      "key": "etiqueta_corta_en_snake_case",
-      "value": "hecho claro en texto"
+      "key": "etiqueta",
+      "value": "hecho claro"
     }
   ]
 }
@@ -265,7 +379,7 @@ No añadas nada fuera del JSON.
     try {
       parsed = JSON.parse(raw);
     } catch {
-      console.error("⚠️ No se pudo parsear JSON de memoria profunda.");
+      console.error("⚠️ No se pudo parsear JSON.");
       return;
     }
 
@@ -281,7 +395,7 @@ No añadas nada fuera del JSON.
 }
 
 // =========================
-// OPENROUTER: RESPUESTA INTELIGENTE
+// OPENROUTER — RESPUESTA INTELIGENTE
 // =========================
 
 async function askOpenRouter(userId, userMessage) {
@@ -291,17 +405,18 @@ async function askOpenRouter(userId, userMessage) {
     {
       role: "system",
       content: `
-Eres Ibrabot, un asistente personal avanzado y directo.
-Tienes memoria profunda del usuario en formato JSON.
-Tu trabajo:
-- Usar esa memoria para responder de forma personalizada.
-- Contestar SIEMPRE de forma clara y concreta.
-- Si el usuario pregunta varias cosas (ej: "¿Cómo me llamo y dónde vivo?"),
-  responde a TODAS en una sola frase, usando la memoria si existe.
+Eres Ibrabot, un asistente personal avanzado.
+
+REGLAS IMPORTANTES:
+- Siempre hablas DESDE la perspectiva del usuario.
+- Usa "tú", "tu madre", "tu comida favorita", "tu ciudad".
+- NUNCA digas "mi madre", "mi comida favorita", "mi ciudad".
+- Si el usuario pregunta varias cosas, responde a TODAS en una sola frase.
+- Usa la memoria profunda si existe.
 - Si no sabes algo, dilo claramente.
 
-Formato de respuesta:
-- Respuestas cortas, claras y útiles.
+ESTILO:
+- Respuestas cortas, claras y directas.
 - Sin rodeos, sin relleno.
 `.trim()
     },
@@ -332,7 +447,7 @@ Formato de respuesta:
     return response.data.choices[0].message.content.trim();
   } catch (err) {
     console.error("⚠️ Error OpenRouter:", err.message);
-    return "Estoy teniendo un pequeño problema técnico, pero sigo aquí contigo.";
+    return "Estoy teniendo un pequeño problema técnico, pero sigo contigo.";
   }
 }
 
@@ -432,4 +547,4 @@ bot.on("message", async (msg) => {
   }
 });
 
-console.log("⚡ Ibrabot listo: memoria profunda optimizada y respuestas claras.");
+console.log("⚡ Ibrabot listo: memoria profunda + perspectiva corregida (Paso 2.2).");
