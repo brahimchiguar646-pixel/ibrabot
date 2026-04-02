@@ -126,7 +126,6 @@ function addToMemory(userId, role, content) {
 function getUserHistory(userId) {
   return memory[userId] || [];
 }
-
 // =========================
 // ANTI‑SPAM
 // =========================
@@ -283,6 +282,8 @@ REGLAS IMPORTANTES:
 - Si el usuario pregunta varias cosas, responde a TODAS en una sola frase.
 - Usa la memoria profunda si existe.
 - Si no sabes algo, dilo claramente.
+- JAMÁS respondas frases vacías como "Entiendo, no hay problema".
+- Si el usuario pregunta por un dato personal, RESPONDE DIRECTAMENTE.
 
 ESTILO:
 - Respuestas cortas, claras y directas.
@@ -319,7 +320,6 @@ ESTILO:
     return "Estoy teniendo un pequeño problema técnico, pero sigo contigo.";
   }
 }
-
 // =========================
 // VOZ → TEXTO
 // =========================
@@ -416,4 +416,4 @@ bot.on("message", async (msg) => {
   }
 });
 
-console.log("⚡ Ibrabot listo: memoria profunda + perspectiva corregida (Paso 2.2).");
+console.log("⚡ Ibrabot listo: memoria profunda + perspectiva corregida (Paso 2.3).");
