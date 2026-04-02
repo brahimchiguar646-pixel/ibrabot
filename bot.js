@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
+const sqlite3 = require('sqlite3').verbose();
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
 ffmpeg.setFfmpegPath(ffmpegPath);
@@ -22,61 +23,75 @@ if (!TELEGRAM_TOKEN || !OPENROUTER_API_KEY) {
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
 // =========================
-// MEMORIA AVANZADA
+// BASE DE DATOS SQLITE
 // =========================
 
-const PROFILE_FILE = path.join(__dirname, "profile.json");
-let profiles = {};
+const db = new sqlite3.Database('memory.db');
 
-function loadProfiles() {
-  try {
-    if (fs.existsSync(PROFILE_FILE)) {
-      profiles = JSON.parse(fs.readFileSync(PROFILE_FILE, "utf8"));
-    }
-  } catch {
-    profiles = {};
-  }
+db.serialize(() => {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS memory (
+      userId TEXT,
+      key TEXT,
+      value TEXT
+    )
+  `);
+});
+
+// Guardar memoria permanente
+function saveFact(userId, key, value) {
+  db.run(
+    `INSERT INTO memory (userId, key, value) VALUES (?, ?, ?)`,
+    [userId, key, value]
+  );
 }
 
-function saveProfiles() {
-  fs.writeFileSync(PROFILE_FILE, JSON.stringify(profiles, null, 2));
+// Leer memoria permanente
+function loadFacts(userId) {
+  return new Promise((resolve) => {
+    db.all(
+      `SELECT key, value FROM memory WHERE userId = ?`,
+      [userId],
+      (err, rows) => {
+        if (err) return resolve({});
+        const profile = {};
+        rows.forEach(r => {
+          if (!profile[r.key]) profile[r.key] = [];
+          profile[r.key].push(r.value);
+        });
+        resolve(profile);
+      }
+    );
+  });
 }
 
-function updateProfile(userId, key, value) {
-  if (!profiles[userId]) profiles[userId] = {};
-  profiles[userId][key] = value;
-  saveProfiles();
-}
-
-// Detecta información importante en el mensaje
+// Detectar información importante
 function extractFacts(userId, text) {
   text = text.toLowerCase();
 
   if (text.includes("me llamo")) {
     const name = text.split("me llamo")[1].trim().split(" ")[0];
-    updateProfile(userId, "name", name);
+    saveFact(userId, "name", name);
   }
 
   if (text.includes("mi cumpleaños es")) {
     const birthday = text.split("mi cumpleaños es")[1].trim();
-    updateProfile(userId, "birthday", birthday);
+    saveFact(userId, "birthday", birthday);
   }
 
   if (text.includes("vivo en")) {
     const place = text.split("vivo en")[1].trim();
-    updateProfile(userId, "location", place);
+    saveFact(userId, "location", place);
   }
 
   if (text.includes("me gusta")) {
     const like = text.split("me gusta")[1].trim();
-    if (!profiles[userId].likes) profiles[userId].likes = [];
-    profiles[userId].likes.push(like);
-    saveProfiles();
+    saveFact(userId, "likes", like);
   }
 }
 
 // =========================
-// MEMORIA DE HISTORIAL
+// HISTORIAL CORTO
 // =========================
 
 const MEMORY_FILE = path.join(__dirname, "memory.json");
@@ -141,21 +156,22 @@ function isSpam(userId) {
 // =========================
 
 async function askOpenRouter(userId, userMessage) {
-  const profile = profiles[userId] || {};
+  const profile = await loadFacts(userId);
 
   const messages = [
     {
       role: "system",
       content: `
 Eres Ibrabot, un asistente personal avanzado.
-Recuerdas datos importantes del usuario:
+Tienes memoria permanente del usuario.
+Recuerdas:
 - nombre
 - gustos
 - cumpleaños
 - ciudad
-- información personal
+- datos personales
+- hechos importantes
 Usa esa memoria para responder mejor.
-No menciones que usas memoria ni detalles técnicos.
 `.trim()
     },
     {
@@ -235,7 +251,6 @@ async function transcribeVoice(fileUrl) {
 // =========================
 
 loadMemory();
-loadProfiles();
 
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
@@ -270,4 +285,4 @@ bot.on("message", async (msg) => {
   }
 });
 
-console.log("Ibrabot listo con memoria avanzada tipo ChatGPT.");
+console.log("Ibrabot listo con memoria permanente SQLite.");
