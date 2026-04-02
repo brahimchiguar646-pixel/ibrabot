@@ -22,7 +22,61 @@ if (!TELEGRAM_TOKEN || !OPENROUTER_API_KEY) {
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
 // =========================
-// MEMORIA POR USUARIO
+// MEMORIA AVANZADA
+// =========================
+
+const PROFILE_FILE = path.join(__dirname, "profile.json");
+let profiles = {};
+
+function loadProfiles() {
+  try {
+    if (fs.existsSync(PROFILE_FILE)) {
+      profiles = JSON.parse(fs.readFileSync(PROFILE_FILE, "utf8"));
+    }
+  } catch {
+    profiles = {};
+  }
+}
+
+function saveProfiles() {
+  fs.writeFileSync(PROFILE_FILE, JSON.stringify(profiles, null, 2));
+}
+
+function updateProfile(userId, key, value) {
+  if (!profiles[userId]) profiles[userId] = {};
+  profiles[userId][key] = value;
+  saveProfiles();
+}
+
+// Detecta información importante en el mensaje
+function extractFacts(userId, text) {
+  text = text.toLowerCase();
+
+  if (text.includes("me llamo")) {
+    const name = text.split("me llamo")[1].trim().split(" ")[0];
+    updateProfile(userId, "name", name);
+  }
+
+  if (text.includes("mi cumpleaños es")) {
+    const birthday = text.split("mi cumpleaños es")[1].trim();
+    updateProfile(userId, "birthday", birthday);
+  }
+
+  if (text.includes("vivo en")) {
+    const place = text.split("vivo en")[1].trim();
+    updateProfile(userId, "location", place);
+  }
+
+  if (text.includes("me gusta")) {
+    const like = text.split("me gusta")[1].trim();
+    if (!profiles[userId].likes) profiles[userId].likes = [];
+    profiles[userId].likes.push(like);
+    saveProfiles();
+  }
+}
+
+// =========================
+// MEMORIA DE HISTORIAL
 // =========================
 
 const MEMORY_FILE = path.join(__dirname, "memory.json");
@@ -57,9 +111,9 @@ function getUserHistory(userId) {
 // ANTI‑SPAM
 // =========================
 
-const spamControl = {}; // { userId: { lastMessageTime, count } }
-const SPAM_INTERVAL = 3000; // 3 segundos
-const SPAM_LIMIT = 3;       // máximo 3 mensajes seguidos
+const spamControl = {};
+const SPAM_INTERVAL = 3000;
+const SPAM_LIMIT = 3;
 
 function isSpam(userId) {
   const now = Date.now();
@@ -87,15 +141,26 @@ function isSpam(userId) {
 // =========================
 
 async function askOpenRouter(userId, userMessage) {
+  const profile = profiles[userId] || {};
+
   const messages = [
     {
       role: "system",
       content: `
 Eres Ibrabot, un asistente personal avanzado.
-Recuerdas el historial del usuario.
-Respondes claro, útil y en su idioma.
-No menciones detalles técnicos.
+Recuerdas datos importantes del usuario:
+- nombre
+- gustos
+- cumpleaños
+- ciudad
+- información personal
+Usa esa memoria para responder mejor.
+No menciones que usas memoria ni detalles técnicos.
 `.trim()
+    },
+    {
+      role: "system",
+      content: `Datos del usuario: ${JSON.stringify(profile)}`
     },
     ...getUserHistory(userId),
     { role: "user", content: userMessage }
@@ -124,7 +189,7 @@ No menciones detalles técnicos.
 }
 
 // =========================
-// VOZ → TEXTO (WHISPER)
+// VOZ → TEXTO
 // =========================
 
 async function transcribeVoice(fileUrl) {
@@ -170,50 +235,39 @@ async function transcribeVoice(fileUrl) {
 // =========================
 
 loadMemory();
+loadProfiles();
 
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  // ANTI‑SPAM
   if (isSpam(userId)) {
-    return bot.sendMessage(chatId, "Estás enviando mensajes demasiado rápido. Espera un momento.");
+    return bot.sendMessage(chatId, "Estás enviando mensajes demasiado rápido.");
   }
 
-  // VOZ
   if (msg.voice) {
-    try {
-      await bot.sendChatAction(chatId, "typing");
+    const file = await bot.getFile(msg.voice.file_id);
+    const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${file.file_path}`;
+    const text = await transcribeVoice(fileUrl);
 
-      const file = await bot.getFile(msg.voice.file_id);
-      const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${file.file_path}`;
+    extractFacts(userId, text);
+    addToMemory(userId, "user", text);
 
-      const text = await transcribeVoice(fileUrl);
+    const reply = await askOpenRouter(userId, text);
+    addToMemory(userId, "assistant", reply);
 
-      addToMemory(userId, "user", text);
-
-      const reply = await askOpenRouter(userId, text);
-      addToMemory(userId, "assistant", reply);
-
-      return bot.sendMessage(chatId, reply);
-    } catch (err) {
-      console.error("Error voz:", err);
-      return bot.sendMessage(chatId, "Error procesando tu mensaje de voz.");
-    }
+    return bot.sendMessage(chatId, reply);
   }
 
-  // TEXTO
   if (msg.text) {
+    extractFacts(userId, msg.text);
     addToMemory(userId, "user", msg.text);
 
-    await bot.sendChatAction(chatId, "typing");
-
     const reply = await askOpenRouter(userId, msg.text);
-
     addToMemory(userId, "assistant", reply);
 
     return bot.sendMessage(chatId, reply);
   }
 });
 
-console.log("Ibrabot listo con memoria, IA, voz y anti‑spam.");
+console.log("Ibrabot listo con memoria avanzada tipo ChatGPT.");
