@@ -54,6 +54,35 @@ function getUserHistory(userId) {
 }
 
 // =========================
+// ANTI‑SPAM
+// =========================
+
+const spamControl = {}; // { userId: { lastMessageTime, count } }
+const SPAM_INTERVAL = 3000; // 3 segundos
+const SPAM_LIMIT = 3;       // máximo 3 mensajes seguidos
+
+function isSpam(userId) {
+  const now = Date.now();
+
+  if (!spamControl[userId]) {
+    spamControl[userId] = { lastMessageTime: now, count: 1 };
+    return false;
+  }
+
+  const diff = now - spamControl[userId].lastMessageTime;
+
+  if (diff < SPAM_INTERVAL) {
+    spamControl[userId].count++;
+  } else {
+    spamControl[userId].count = 1;
+  }
+
+  spamControl[userId].lastMessageTime = now;
+
+  return spamControl[userId].count > SPAM_LIMIT;
+}
+
+// =========================
 // OPENROUTER
 // =========================
 
@@ -146,9 +175,12 @@ bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  // -------------------------
-  // MENSAJES DE VOZ
-  // -------------------------
+  // ANTI‑SPAM
+  if (isSpam(userId)) {
+    return bot.sendMessage(chatId, "Estás enviando mensajes demasiado rápido. Espera un momento.");
+  }
+
+  // VOZ
   if (msg.voice) {
     try {
       await bot.sendChatAction(chatId, "typing");
@@ -170,9 +202,7 @@ bot.on("message", async (msg) => {
     }
   }
 
-  // -------------------------
-  // MENSAJES DE TEXTO
-  // -------------------------
+  // TEXTO
   if (msg.text) {
     addToMemory(userId, "user", msg.text);
 
@@ -186,4 +216,4 @@ bot.on("message", async (msg) => {
   }
 });
 
-console.log("Ibrabot listo con memoria, IA y voz.");
+console.log("Ibrabot listo con memoria, IA, voz y anti‑spam.");
