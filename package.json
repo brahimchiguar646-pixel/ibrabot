@@ -1,16 +1,17 @@
 {
   "name": "ibrabot",
   "version": "1.0.0",
-  "description": "Telegram bot with memory, voice and OpenRouter integration",
+  "description": "Telegram bot with memory, SQLite, voice and OpenRouter integration",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
   },
   "dependencies": {
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "axios": "^1.6.7",
     "dotenv": "^16.4.5",
-    "node-telegram-bot-api": "0.67.0",
     "fluent-ffmpeg": "^2.1.2",
-    "@ffmpeg-installer/ffmpeg": "^1.1.0"
+    "node-telegram-bot-api": "0.67.0",
+    "sqlite3": "5.1.6"
   }
 }
