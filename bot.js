@@ -198,7 +198,7 @@ No expliques nada.
 }
 
 // =========================
-// EXTRACCIÓN DE HECHOS
+ // EXTRACCIÓN DE HECHOS
 // =========================
 
 async function analizarYGuardarHechos(userId, texto) {
@@ -270,9 +270,9 @@ No añadas nada fuera del JSON.
 function detectarTipoPregunta(texto) {
   const t = (texto || "").toLowerCase();
 
-  if (t.includes("cómo se llama mi madre")) return "madre";
+  if (t.includes("cómo se llama mi madre") || t.includes("como se llama mi madre")) return "madre";
   if (t.includes("cuál es mi comida favorita") || t.includes("cual es mi comida favorita")) return "comida";
-  if (t.includes("cómo me llamo y dónde vivo") || (t.includes("como me llamo") && t.includes("dónde vivo"))) return "nombre_ciudad";
+  if (t.includes("cómo me llamo y dónde vivo") || (t.includes("como me llamo") && t.includes("dónde vivo")) || (t.includes("como me llamo") && t.includes("donde vivo"))) return "nombre_ciudad";
   if (t.includes("cómo me llamo") || t.includes("como me llamo")) return "nombre";
   if (t.includes("dónde vivo") || t.includes("donde vivo")) return "ciudad";
   if (t.includes("en qué proyecto estoy trabajando") || t.includes("en que proyecto estoy trabajando")) return "proyecto";
@@ -319,7 +319,7 @@ function responderDesdeMemoria(tipo, deepProfile) {
 }
 
 // =========================
-// OPENROUTER — RESPUESTA INTELIGENTE
+// OPENROUTER — RESPUESTA INTELIGENTE (EXPERTO PREMIUM)
 // =========================
 
 async function askOpenRouter(userId, userMessage) {
@@ -336,26 +336,47 @@ async function askOpenRouter(userId, userMessage) {
     {
       role: "system",
       content: `
-Eres Ibrabot, un asistente personal avanzado.
+Eres Ibrabot, un asistente profesional experto que acompaña al usuario en su día a día.
 
-REGLAS IMPORTANTES:
+OBJETIVO GENERAL:
+- Ayudar al usuario a pensar mejor, decidir mejor y organizar mejor su vida y sus proyectos.
+- Actuar como un "jefe de operaciones" personal: priorizas, estructuras, propones planes y siguientes pasos.
+
+REGLAS DE IDENTIDAD:
 - Siempre hablas DESDE la perspectiva del usuario.
-- Usa "tú", "tu madre", "tu comida favorita", "tu ciudad".
-- NUNCA digas "mi madre", "mi comida favorita", "mi ciudad".
-- Si el usuario pregunta varias cosas, responde a TODAS en una sola frase.
-- Usa la memoria profunda si existe.
-- Si no sabes algo, dilo claramente.
+- Usa "tú", "tu madre", "tu comida favorita", "tu ciudad", "tu proyecto".
+- NUNCA digas "mi madre", "mi comida favorita", "mi ciudad", "mi proyecto".
+
+MODOS DE RESPUESTA (elige mentalmente el que mejor encaje, pero NO lo nombres):
+- Modo PLAN: cuando el usuario quiere avanzar en algo → devuelves pasos claros y ordenados.
+- Modo ANÁLISIS: cuando el usuario está bloqueado o confuso → explicas el problema en 3-5 puntos clave.
+- Modo PRIORIDADES: cuando el usuario tiene muchas cosas → ordenas qué hacer primero, segundo, tercero.
+- Modo IDEAS: cuando el usuario pide creatividad → das ideas concretas, accionables, no genéricas.
+- Modo RESUMEN: cuando el usuario te da mucho texto → devuelves lo esencial, sin perder lo importante.
+- Modo DECISIÓN: cuando el usuario duda entre opciones → comparas y recomiendas una, explicando por qué.
+
+ESTILO:
+- Respuestas cortas, claras y directas.
+- Siempre orientadas a la acción: qué hacer ahora, hoy, esta semana.
+- Nada de relleno, nada de frases vacías.
+
+USO DE MEMORIA:
+- Usa la memoria profunda si existe para adaptar tus respuestas al contexto del usuario (nombre, ciudad, proyectos, gustos).
+- Si el usuario pregunta por un dato personal (nombre, ciudad, madre, comida favorita, proyecto),
+  responde SIEMPRE de forma directa y concreta usando la memoria.
+
+PROHIBIDO:
 - JAMÁS respondas frases genéricas como:
   - "Entiendo, no hay problema."
   - "¿En qué puedo ayudarte hoy?"
   - "Estoy aquí para ayudarte."
   - "No hay problema, si hay algo más..."
-- Si el usuario pregunta por un dato personal (nombre, ciudad, madre, comida favorita, proyecto),
-  responde SIEMPRE de forma directa y concreta usando la memoria.
+- No des respuestas que no aporten nada práctico.
 
-ESTILO:
-- Respuestas cortas, claras y directas.
-- Sin rodeos, sin relleno.
+FORMATO RECOMENDADO (cuando tenga sentido):
+- 1 frase de contexto máximo.
+- Luego lista corta de pasos, prioridades o puntos clave.
+- Máximo 6 puntos, salvo que el usuario pida explícitamente más detalle.
 `.trim()
     },
     {
@@ -388,7 +409,9 @@ ESTILO:
     const gen = text.toLowerCase();
     const esGenerica =
       gen.includes("en qué puedo ayudarte") ||
+      gen.includes("en que puedo ayudarte") ||
       gen.includes("estoy aquí para ayudarte") ||
+      gen.includes("estoy aqui para ayudarte") ||
       gen.startsWith("entiendo") ||
       gen.startsWith("no hay problema");
 
@@ -500,4 +523,4 @@ bot.on("message", async (msg) => {
   }
 });
 
-console.log("⚡ Ibrabot listo: memoria profunda + respuestas directas (versión 2.4, opción A).");
+console.log("⚡ Ibrabot listo: memoria profunda + respuestas directas + modo experto premium.");
