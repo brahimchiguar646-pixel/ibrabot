@@ -152,6 +152,50 @@ function isSpam(userId) {
 }
 
 // =========================
+// INTERPRETACIÓN DE TEXTO
+// =========================
+
+async function interpretarTexto(textoOriginal) {
+  try {
+    const response = await axios.post(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        model: "openai/gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: `
+Eres un módulo de corrección inteligente.
+Tu trabajo es:
+- corregir errores de escritura
+- interpretar frases incompletas
+- entender la intención del usuario
+Devuelves SOLO el texto corregido y claro.
+No expliques nada.
+`.trim()
+          },
+          {
+            role: "user",
+            content: textoOriginal
+          }
+        ]
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json"
+        }
+      }
+    );
+
+    return response.data.choices[0].message.content.trim();
+  } catch (err) {
+    console.error("Error interpretando texto:", err.message);
+    return textoOriginal;
+  }
+}
+
+// =========================
 // OPENROUTER
 // =========================
 
@@ -268,7 +312,9 @@ bot.on("message", async (msg) => {
     extractFacts(userId, text);
     addToMemory(userId, "user", text);
 
-    const reply = await askOpenRouter(userId, text);
+    const textoInterpretado = await interpretarTexto(text);
+    const reply = await askOpenRouter(userId, textoInterpretado);
+
     addToMemory(userId, "assistant", reply);
 
     return bot.sendMessage(chatId, reply);
@@ -278,11 +324,13 @@ bot.on("message", async (msg) => {
     extractFacts(userId, msg.text);
     addToMemory(userId, "user", msg.text);
 
-    const reply = await askOpenRouter(userId, msg.text);
+    const textoInterpretado = await interpretarTexto(msg.text);
+    const reply = await askOpenRouter(userId, textoInterpretado);
+
     addToMemory(userId, "assistant", reply);
 
     return bot.sendMessage(chatId, reply);
   }
 });
 
-console.log("Ibrabot listo con memoria permanente SQLite.");
+console.log("Ibrabot listo con memoria permanente, interpretación inteligente y SQLite.");
