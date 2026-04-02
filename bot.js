@@ -126,6 +126,7 @@ function addToMemory(userId, role, content) {
 function getUserHistory(userId) {
   return memory[userId] || [];
 }
+
 // =========================
 // ANTI‑SPAM
 // =========================
@@ -263,11 +264,73 @@ No añadas nada fuera del JSON.
 }
 
 // =========================
+// DETECTOR DE PREGUNTAS DE MEMORIA
+// =========================
+
+function detectarTipoPregunta(texto) {
+  const t = (texto || "").toLowerCase();
+
+  if (t.includes("cómo se llama mi madre")) return "madre";
+  if (t.includes("cuál es mi comida favorita") || t.includes("cual es mi comida favorita")) return "comida";
+  if (t.includes("cómo me llamo y dónde vivo") || (t.includes("como me llamo") && t.includes("dónde vivo"))) return "nombre_ciudad";
+  if (t.includes("cómo me llamo") || t.includes("como me llamo")) return "nombre";
+  if (t.includes("dónde vivo") || t.includes("donde vivo")) return "ciudad";
+  if (t.includes("en qué proyecto estoy trabajando") || t.includes("en que proyecto estoy trabajando")) return "proyecto";
+
+  return null;
+}
+
+function responderDesdeMemoria(tipo, deepProfile) {
+  const p = deepProfile || {};
+
+  const get = (cat, key) =>
+    p[cat] && p[cat][key] && p[cat][key][p[cat][key].length - 1];
+
+  const nombre = get("personas", "nombre_usuario") || get("personas", "nombre");
+  const ciudad = get("lugares", "ciudad") || get("lugares", "residencia");
+  const madre = get("personas", "madre") || get("personas", "nombre_madre");
+  const comida = get("gustos", "comida_favorita");
+  const proyecto = get("proyectos", "proyecto_actual");
+
+  switch (tipo) {
+    case "madre":
+      if (madre) return `Tu madre se llama ${madre}.`;
+      return "No tengo registrado el nombre de tu madre.";
+    case "comida":
+      if (comida) return `Tu comida favorita es ${comida}.`;
+      return "No tengo registrada tu comida favorita.";
+    case "nombre_ciudad":
+      if (nombre && ciudad) return `Te llamas ${nombre} y vives en ${ciudad}.`;
+      if (nombre && !ciudad) return `Te llamas ${nombre}, pero no tengo registrada tu ciudad de residencia.`;
+      if (!nombre && ciudad) return `Vives en ${ciudad}, pero no tengo registrado tu nombre.`;
+      return "No tengo registrado ni tu nombre ni tu ciudad de residencia.";
+    case "nombre":
+      if (nombre) return `Te llamas ${nombre}.`;
+      return "No tengo registrado tu nombre.";
+    case "ciudad":
+      if (ciudad) return `Vives en ${ciudad}.`;
+      return "No tengo registrada tu ciudad de residencia.";
+    case "proyecto":
+      if (proyecto) return `Estás trabajando en ${proyecto}.`;
+      return "No tengo registrado en qué proyecto estás trabajando.";
+    default:
+      return null;
+  }
+}
+
+// =========================
 // OPENROUTER — RESPUESTA INTELIGENTE
 // =========================
 
 async function askOpenRouter(userId, userMessage) {
   const deepProfile = await loadDeepProfile(userId);
+
+  // 1) Detectar si es una pregunta de memoria directa
+  const tipo = detectarTipoPregunta(userMessage);
+  if (tipo) {
+    const directa = responderDesdeMemoria(tipo, deepProfile);
+    if (directa) return directa;
+  }
 
   const messages = [
     {
@@ -282,8 +345,13 @@ REGLAS IMPORTANTES:
 - Si el usuario pregunta varias cosas, responde a TODAS en una sola frase.
 - Usa la memoria profunda si existe.
 - Si no sabes algo, dilo claramente.
-- JAMÁS respondas frases vacías como "Entiendo, no hay problema".
-- Si el usuario pregunta por un dato personal, RESPONDE DIRECTAMENTE.
+- JAMÁS respondas frases genéricas como:
+  - "Entiendo, no hay problema."
+  - "¿En qué puedo ayudarte hoy?"
+  - "Estoy aquí para ayudarte."
+  - "No hay problema, si hay algo más..."
+- Si el usuario pregunta por un dato personal (nombre, ciudad, madre, comida favorita, proyecto),
+  responde SIEMPRE de forma directa y concreta usando la memoria.
 
 ESTILO:
 - Respuestas cortas, claras y directas.
@@ -314,12 +382,28 @@ ESTILO:
       }
     );
 
-    return response.data.choices[0].message.content.trim();
+    const text = response.data.choices[0].message.content.trim();
+
+    // Filtro extra: si aún así devuelve una frase genérica, la sustituimos
+    const gen = text.toLowerCase();
+    const esGenerica =
+      gen.includes("en qué puedo ayudarte") ||
+      gen.includes("estoy aquí para ayudarte") ||
+      gen.startsWith("entiendo") ||
+      gen.startsWith("no hay problema");
+
+    if (esGenerica && tipo) {
+      const directa = responderDesdeMemoria(tipo, deepProfile);
+      if (directa) return directa;
+    }
+
+    return text;
   } catch (err) {
     console.error("⚠️ Error OpenRouter:", err.message);
     return "Estoy teniendo un pequeño problema técnico, pero sigo contigo.";
   }
 }
+
 // =========================
 // VOZ → TEXTO
 // =========================
@@ -416,4 +500,4 @@ bot.on("message", async (msg) => {
   }
 });
 
-console.log("⚡ Ibrabot listo: memoria profunda + perspectiva corregida (Paso 2.3).");
+console.log("⚡ Ibrabot listo: memoria profunda + respuestas directas (versión 2.4, opción A).");
