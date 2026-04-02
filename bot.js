@@ -23,7 +23,7 @@ if (!TELEGRAM_TOKEN || !OPENROUTER_API_KEY) {
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
 // =========================
-// BASE DE DATOS SQLITE (MEMORIA PROFUNDA)
+// SQLITE: MEMORIA PROFUNDA
 // =========================
 
 let db;
@@ -37,7 +37,6 @@ try {
   console.error("❌ Error crítico con SQLite:", err.message);
 }
 
-// Tabla de memoria profunda organizada
 db.run(`
   CREATE TABLE IF NOT EXISTS deep_memory (
     userId TEXT,
@@ -48,7 +47,7 @@ db.run(`
   )
 `);
 
-// Guardar o actualizar un hecho (upsert)
+// Guardar hecho
 function saveDeepFact(userId, category, key, value) {
   try {
     const now = Date.now();
@@ -64,7 +63,7 @@ function saveDeepFact(userId, category, key, value) {
   }
 }
 
-// Leer memoria profunda completa del usuario
+// Cargar perfil profundo
 function loadDeepProfile(userId) {
   return new Promise((resolve) => {
     try {
@@ -93,7 +92,7 @@ function loadDeepProfile(userId) {
 }
 
 // =========================
-// HISTORIAL CORTO
+// HISTORIAL CORTO (CONTEXT0)
 // =========================
 
 const MEMORY_FILE = path.join(__dirname, "memory.json");
@@ -119,7 +118,7 @@ function addToMemory(userId, role, content) {
   try {
     if (!memory[userId]) memory[userId] = [];
     memory[userId].push({ role, content, ts: Date.now() });
-    if (memory[userId].length > 20) memory[userId] = memory[userId].slice(-20);
+    if (memory[userId].length > 15) memory[userId] = memory[userId].slice(-15);
     saveMemory();
   } catch (err) {
     console.error("❌ Error añadiendo al historial:", err.message);
@@ -165,6 +164,9 @@ function isSpam(userId) {
 
 async function interpretarTexto(textoOriginal) {
   try {
+    const trimmed = (textoOriginal || "").trim();
+    if (!trimmed) return "";
+
     const response = await axios.post(
       "https://openrouter.ai/api/v1/chat/completions",
       {
@@ -173,12 +175,15 @@ async function interpretarTexto(textoOriginal) {
           {
             role: "system",
             content: `
-Eres un módulo de corrección inteligente.
-Corriges errores, interpretas frases incompletas y devuelves el texto claro.
-No expliques nada.
+Eres un módulo de normalización de texto.
+Tareas:
+- Corregir errores de escritura.
+- Completar frases cortas o mal escritas.
+- Mantener el mismo idioma del usuario.
+Devuelves SOLO el texto corregido, sin explicaciones.
 `.trim()
           },
-          { role: "user", content: textoOriginal }
+          { role: "user", content: trimmed }
         ]
       },
       {
@@ -186,7 +191,7 @@ No expliques nada.
           Authorization: `Bearer ${OPENROUTER_API_KEY}`,
           "Content-Type": "application/json"
         },
-        timeout: 15000
+        timeout: 8000
       }
     );
 
@@ -198,11 +203,14 @@ No expliques nada.
 }
 
 // =========================
-// EXTRACCIÓN DE HECHOS (MEMORIA PROFUNDA)
+// EXTRACCIÓN DE HECHOS
 // =========================
 
 async function analizarYGuardarHechos(userId, texto) {
   try {
+    const clean = (texto || "").trim();
+    if (!clean) return;
+
     const response = await axios.post(
       "https://openrouter.ai/api/v1/chat/completions",
       {
@@ -211,30 +219,35 @@ async function analizarYGuardarHechos(userId, texto) {
           {
             role: "system",
             content: `
-Eres un módulo de análisis de memoria personal.
-Tu tarea:
-- Leer el mensaje del usuario.
-- Extraer información importante sobre su vida, gustos, proyectos, rutinas, personas, objetivos, lugares, etc.
-- Clasificar cada hecho en una categoría.
-- Devolver SOLO un JSON con este formato:
+Eres un módulo de memoria personal.
+Lees el mensaje del usuario y extraes SOLO hechos útiles sobre su vida.
+Clasifícalos en categorías:
+- personas
+- gustos
+- proyectos
+- rutinas
+- lugares
+- tareas
+- objetivos
+- preferencias
+- otros
+
+Devuelves SOLO un JSON con este formato:
 
 {
   "facts": [
     {
       "category": "personas|gustos|proyectos|rutinas|lugares|tareas|objetivos|preferencias|otros",
       "key": "etiqueta_corta_en_snake_case",
-      "value": "texto claro con el hecho"
+      "value": "hecho claro en texto"
     }
   ]
 }
 
-No expliques nada, no añadas texto fuera del JSON.
+No añadas nada fuera del JSON.
 `.trim()
           },
-          {
-            role: "user",
-            content: texto
-          }
+          { role: "user", content: clean }
         ]
       },
       {
@@ -242,7 +255,7 @@ No expliques nada, no añadas texto fuera del JSON.
           Authorization: `Bearer ${OPENROUTER_API_KEY}`,
           "Content-Type": "application/json"
         },
-        timeout: 20000
+        timeout: 9000
       }
     );
 
@@ -268,7 +281,7 @@ No expliques nada, no añadas texto fuera del JSON.
 }
 
 // =========================
-// OPENROUTER (USA MEMORIA PROFUNDA)
+// OPENROUTER: RESPUESTA INTELIGENTE
 // =========================
 
 async function askOpenRouter(userId, userMessage) {
@@ -278,15 +291,18 @@ async function askOpenRouter(userId, userMessage) {
     {
       role: "system",
       content: `
-Eres Ibrabot, un asistente personal avanzado.
-Tienes memoria profunda y organizada del usuario.
-Debes usar esa memoria para:
-- Recordar personas importantes
-- Recordar gustos y preferencias
-- Recordar proyectos y objetivos
-- Recordar rutinas y lugares importantes
-- Adaptar tus respuestas a su vida real
-No inventes datos nuevos sobre el usuario, solo usa lo que está en la memoria.
+Eres Ibrabot, un asistente personal avanzado y directo.
+Tienes memoria profunda del usuario en formato JSON.
+Tu trabajo:
+- Usar esa memoria para responder de forma personalizada.
+- Contestar SIEMPRE de forma clara y concreta.
+- Si el usuario pregunta varias cosas (ej: "¿Cómo me llamo y dónde vivo?"),
+  responde a TODAS en una sola frase, usando la memoria si existe.
+- Si no sabes algo, dilo claramente.
+
+Formato de respuesta:
+- Respuestas cortas, claras y útiles.
+- Sin rodeos, sin relleno.
 `.trim()
     },
     {
@@ -309,11 +325,11 @@ No inventes datos nuevos sobre el usuario, solo usa lo que está en la memoria.
           Authorization: `Bearer ${OPENROUTER_API_KEY}`,
           "Content-Type": "application/json"
         },
-        timeout: 20000
+        timeout: 12000
       }
     );
 
-    return response.data.choices[0].message.content;
+    return response.data.choices[0].message.content.trim();
   } catch (err) {
     console.error("⚠️ Error OpenRouter:", err.message);
     return "Estoy teniendo un pequeño problema técnico, pero sigo aquí contigo.";
@@ -353,7 +369,8 @@ async function transcribeVoice(fileUrl) {
         headers: {
           Authorization: `Bearer ${OPENROUTER_API_KEY}`,
           "Content-Type": "application/json"
-        }
+        },
+        timeout: 15000
       }
     );
 
@@ -382,11 +399,11 @@ bot.on("message", async (msg) => {
       return bot.sendMessage(chatId, "Estás enviando mensajes demasiado rápido.");
     }
 
+    // VOZ
     if (msg.voice) {
       const file = await bot.getFile(msg.voice.file_id);
       const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${file.file_path}`;
       const text = await transcribeVoice(fileUrl);
-
       if (!text) return;
 
       const textoInterpretado = await interpretarTexto(text);
@@ -399,6 +416,7 @@ bot.on("message", async (msg) => {
       return bot.sendMessage(chatId, reply);
     }
 
+    // TEXTO
     if (msg.text) {
       const textoInterpretado = await interpretarTexto(msg.text);
       await analizarYGuardarHechos(userId, textoInterpretado);
@@ -414,4 +432,4 @@ bot.on("message", async (msg) => {
   }
 });
 
-console.log("🧠 Ibrabot listo con MEMORIA PROFUNDA ORGANIZADA (Paso 2).");
+console.log("⚡ Ibrabot listo: memoria profunda optimizada y respuestas claras.");
