@@ -1,92 +1,178 @@
-const TelegramBot = require("node-telegram-bot-api");
-const axios = require("axios");
-const fs = require("fs");
+require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
+const TelegramBot = require('node-telegram-bot-api');
+const axios = require('axios');
 
-// === CONFIGURACIÓN DESDE VARIABLES DE ENTORNO ===
+// =========================
+// CONFIGURACIÓN BÁSICA
+// =========================
+
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-const OPENROUTER_MODEL = "openai/gpt-4o-mini";
 
-// Verificación básica
-if (!TELEGRAM_TOKEN || !OPENROUTER_API_KEY) {
-  console.error("❌ Faltan TELEGRAM_TOKEN u OPENROUTER_API_KEY en las variables de entorno.");
+if (!TELEGRAM_TOKEN) {
+  console.error('FALTA TELEGRAM_TOKEN en las variables de entorno');
   process.exit(1);
 }
 
-// === CARGAR MEMORIA DESDE DISCO ===
-let memory = {};
-try {
-  memory = JSON.parse(fs.readFileSync("memory.json", "utf8"));
-} catch (e) {
-  memory = {};
+if (!OPENROUTER_API_KEY) {
+  console.error('FALTA OPENROUTER_API_KEY en las variables de entorno');
+  process.exit(1);
 }
 
-// === GUARDAR MEMORIA EN DISCO ===
-function saveMemory() {
-  fs.writeFileSync("memory.json", JSON.stringify(memory, null, 2));
-}
-
-// Iniciar bot
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
-console.log("✅ Ibrabot está encendido con memoria persistente...");
+// =========================
+// MEMORIA POR USUARIO
+// =========================
 
-// Escuchar mensajes
-bot.on("message", async (msg) => {
-  const chatId = msg.chat.id;
-  const userText = msg.text || "";
+const MEMORY_FILE = path.join(__dirname, 'memory.json');
+let memory = {};
 
-  if (!userText.trim()) {
-    return bot.sendMessage(chatId, "Envíame un mensaje de texto, por favor.");
+// Cargar memoria desde disco (si existe)
+function loadMemory() {
+  try {
+    if (fs.existsSync(MEMORY_FILE)) {
+      const raw = fs.readFileSync(MEMORY_FILE, 'utf8');
+      memory = JSON.parse(raw);
+      console.log('Memoria cargada desde memory.json');
+    } else {
+      memory = {};
+      console.log('No había memoria previa, empezando limpio.');
+    }
+  } catch (err) {
+    console.error('Error cargando memoria:', err);
+    memory = {};
+  }
+}
+
+// Guardar memoria en disco
+function saveMemory() {
+  try {
+    fs.writeFileSync(MEMORY_FILE, JSON.stringify(memory, null, 2), 'utf8');
+  } catch (err) {
+    console.error('Error guardando memoria:', err);
+  }
+}
+
+// Añadir mensaje a la memoria de un usuario
+function addToMemory(userId, role, content) {
+  if (!memory[userId]) {
+    memory[userId] = [];
   }
 
-  // Crear memoria para este usuario si no existe
-  if (!memory[chatId]) {
-    memory[chatId] = {
-      history: []
-    };
+  memory[userId].push({
+    role,
+    content,
+    ts: Date.now()
+  });
+
+  // Limitar a las últimas 20 entradas por usuario
+  if (memory[userId].length > 20) {
+    memory[userId] = memory[userId].slice(-20);
   }
 
-  // Guardar mensaje del usuario en la memoria
-  memory[chatId].history.push({ role: "user", content: userText });
   saveMemory();
+}
 
-  // Mostrar escribiendo...
-  bot.sendChatAction(chatId, "typing");
+// Obtener historial de un usuario en formato para OpenRouter
+function getUserHistory(userId) {
+  if (!memory[userId]) return [];
+
+  return memory[userId].map(m => ({
+    role: m.role,
+    content: m.content
+  }));
+}
+
+// =========================
+// LLAMADA A OPENROUTER
+// =========================
+
+async function askOpenRouter(userId, userMessage) {
+  const history = getUserHistory(userId);
+
+  const systemPrompt = `
+Eres Ibrabot, un asistente personal de Brahim.
+Recuerdas el contexto de cada usuario según su historial.
+Respondes de forma clara, útil y directa.
+Si el usuario habla en español, respondes en español.
+Si habla en otro idioma, respondes en ese idioma.
+No menciones que usas OpenRouter ni detalles técnicos.
+  `.trim();
+
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    ...history,
+    { role: 'user', content: userMessage }
+  ];
 
   try {
     const response = await axios.post(
-      "https://openrouter.ai/api/v1/chat/completions",
+      'https://openrouter.ai/api/v1/chat/completions',
       {
-        model: OPENROUTER_MODEL,
-        temperature: 0.7,
-        messages: [
-          {
-            role: "system",
-            content:
-              "Eres Ibrabot, un asistente profesional, cálido, rápido y muy humano. Tienes memoria por usuario y recuerdas el contexto anterior."
-          },
-          ...memory[chatId].history
-        ]
+        model: 'openai/gpt-4o-mini',
+        messages
       },
       {
         headers: {
-          "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
-          "Content-Type": "application/json"
-        }
+          'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'https://github.com/brahimchiguar646-pixel/ibrabot',
+          'X-Title': 'Ibrabot Telegram Bot'
+        },
+        timeout: 30000
       }
     );
 
-    const aiMessage = response.data.choices[0].message.content;
+    const reply =
+      response.data?.choices?.[0]?.message?.content ||
+      'Lo siento, no pude generar una respuesta ahora mismo.';
 
-    // Guardar respuesta del bot en la memoria
-    memory[chatId].history.push({ role: "assistant", content: aiMessage });
-    saveMemory();
-
-    await bot.sendMessage(chatId, aiMessage, { parse_mode: "Markdown" });
-
-  } catch (error) {
-    console.error("❌ Error:", error?.response?.data || error.message);
-    bot.sendMessage(chatId, "Hubo un error procesando tu mensaje.");
+    return reply;
+  } catch (err) {
+    console.error('Error llamando a OpenRouter:', err.response?.data || err.message);
+    return 'Ha ocurrido un error al pensar la respuesta. Intenta de nuevo en un momento.';
   }
+}
+
+// =========================
+// MANEJO DE MENSAJES
+// =========================
+
+loadMemory();
+
+bot.on('message', async (msg) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  const text = msg.text;
+
+  // Ignorar mensajes sin texto (luego añadimos voz, fotos, etc.)
+  if (!text) {
+    return;
+  }
+
+  console.log(`Mensaje de ${userId}: ${text}`);
+
+  // Guardar mensaje del usuario en memoria
+  addToMemory(userId, 'user', text);
+
+  // Indicador de "escribiendo..."
+  await bot.sendChatAction(chatId, 'typing');
+
+  // Pedir respuesta inteligente a OpenRouter
+  const reply = await askOpenRouter(userId, text);
+
+  // Guardar respuesta del bot en memoria
+  addToMemory(userId, 'assistant', reply);
+
+  // Enviar respuesta al usuario
+  bot.sendMessage(chatId, reply, {
+    parse_mode: 'Markdown'
+  }).catch(err => {
+    console.error('Error enviando mensaje a Telegram:', err.message);
+  });
 });
+
+console.log('Ibrabot está corriendo con memoria por usuario y respuestas inteligentes.');
