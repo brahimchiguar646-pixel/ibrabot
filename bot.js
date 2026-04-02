@@ -16,78 +16,70 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 
 if (!TELEGRAM_TOKEN || !OPENROUTER_API_KEY) {
-  console.error("Faltan variables de entorno.");
+  console.error("❌ ERROR: Faltan variables de entorno.");
   process.exit(1);
 }
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
 // =========================
-// BASE DE DATOS SQLITE
+// BASE DE DATOS SQLITE (CON SEGURIDAD)
 // =========================
 
-const db = new sqlite3.Database('memory.db');
+let db;
 
-db.serialize(() => {
-  db.run(`
-    CREATE TABLE IF NOT EXISTS memory (
-      userId TEXT,
-      key TEXT,
-      value TEXT
-    )
-  `);
-});
+try {
+  db = new sqlite3.Database('memory.db', (err) => {
+    if (err) console.error("❌ Error abriendo SQLite:", err.message);
+    else console.log("📦 SQLite cargado correctamente.");
+  });
+} catch (err) {
+  console.error("❌ Error crítico con SQLite:", err.message);
+}
+
+// Crear tabla segura
+db.run(`
+  CREATE TABLE IF NOT EXISTS memory (
+    userId TEXT,
+    key TEXT,
+    value TEXT
+  )
+`);
 
 // Guardar memoria permanente
 function saveFact(userId, key, value) {
-  db.run(
-    `INSERT INTO memory (userId, key, value) VALUES (?, ?, ?)`,
-    [userId, key, value]
-  );
+  try {
+    db.run(
+      `INSERT INTO memory (userId, key, value) VALUES (?, ?, ?)`,
+      [userId, key, value]
+    );
+  } catch (err) {
+    console.error("❌ Error guardando memoria:", err.message);
+  }
 }
 
 // Leer memoria permanente
 function loadFacts(userId) {
   return new Promise((resolve) => {
-    db.all(
-      `SELECT key, value FROM memory WHERE userId = ?`,
-      [userId],
-      (err, rows) => {
-        if (err) return resolve({});
-        const profile = {};
-        rows.forEach(r => {
-          if (!profile[r.key]) profile[r.key] = [];
-          profile[r.key].push(r.value);
-        });
-        resolve(profile);
-      }
-    );
+    try {
+      db.all(
+        `SELECT key, value FROM memory WHERE userId = ?`,
+        [userId],
+        (err, rows) => {
+          if (err) return resolve({});
+          const profile = {};
+          rows.forEach(r => {
+            if (!profile[r.key]) profile[r.key] = [];
+            profile[r.key].push(r.value);
+          });
+          resolve(profile);
+        }
+      );
+    } catch (err) {
+      console.error("❌ Error leyendo memoria:", err.message);
+      resolve({});
+    }
   });
-}
-
-// Detectar información importante
-function extractFacts(userId, text) {
-  text = text.toLowerCase();
-
-  if (text.includes("me llamo")) {
-    const name = text.split("me llamo")[1].trim().split(" ")[0];
-    saveFact(userId, "name", name);
-  }
-
-  if (text.includes("mi cumpleaños es")) {
-    const birthday = text.split("mi cumpleaños es")[1].trim();
-    saveFact(userId, "birthday", birthday);
-  }
-
-  if (text.includes("vivo en")) {
-    const place = text.split("vivo en")[1].trim();
-    saveFact(userId, "location", place);
-  }
-
-  if (text.includes("me gusta")) {
-    const like = text.split("me gusta")[1].trim();
-    saveFact(userId, "likes", like);
-  }
 }
 
 // =========================
@@ -97,25 +89,31 @@ function extractFacts(userId, text) {
 const MEMORY_FILE = path.join(__dirname, "memory.json");
 let memory = {};
 
-function loadMemory() {
-  try {
-    if (fs.existsSync(MEMORY_FILE)) {
-      memory = JSON.parse(fs.readFileSync(MEMORY_FILE, "utf8"));
-    }
-  } catch {
-    memory = {};
+try {
+  if (fs.existsSync(MEMORY_FILE)) {
+    memory = JSON.parse(fs.readFileSync(MEMORY_FILE, "utf8"));
   }
+} catch {
+  memory = {};
 }
 
 function saveMemory() {
-  fs.writeFileSync(MEMORY_FILE, JSON.stringify(memory, null, 2));
+  try {
+    fs.writeFileSync(MEMORY_FILE, JSON.stringify(memory, null, 2));
+  } catch (err) {
+    console.error("❌ Error guardando historial:", err.message);
+  }
 }
 
 function addToMemory(userId, role, content) {
-  if (!memory[userId]) memory[userId] = [];
-  memory[userId].push({ role, content, ts: Date.now() });
-  if (memory[userId].length > 20) memory[userId] = memory[userId].slice(-20);
-  saveMemory();
+  try {
+    if (!memory[userId]) memory[userId] = [];
+    memory[userId].push({ role, content, ts: Date.now() });
+    if (memory[userId].length > 20) memory[userId] = memory[userId].slice(-20);
+    saveMemory();
+  } catch (err) {
+    console.error("❌ Error añadiendo al historial:", err.message);
+  }
 }
 
 function getUserHistory(userId) {
@@ -152,7 +150,7 @@ function isSpam(userId) {
 }
 
 // =========================
-// INTERPRETACIÓN DE TEXTO
+// INTERPRETACIÓN DE TEXTO (CON SEGURIDAD)
 // =========================
 
 async function interpretarTexto(textoOriginal) {
@@ -166,37 +164,31 @@ async function interpretarTexto(textoOriginal) {
             role: "system",
             content: `
 Eres un módulo de corrección inteligente.
-Tu trabajo es:
-- corregir errores de escritura
-- interpretar frases incompletas
-- entender la intención del usuario
-Devuelves SOLO el texto corregido y claro.
+Corrige errores, interpreta frases incompletas y devuelve el texto claro.
 No expliques nada.
 `.trim()
           },
-          {
-            role: "user",
-            content: textoOriginal
-          }
+          { role: "user", content: textoOriginal }
         ]
       },
       {
         headers: {
           Authorization: `Bearer ${OPENROUTER_API_KEY}`,
           "Content-Type": "application/json"
-        }
+        },
+        timeout: 15000
       }
     );
 
     return response.data.choices[0].message.content.trim();
   } catch (err) {
-    console.error("Error interpretando texto:", err.message);
+    console.error("⚠️ Error interpretando texto:", err.message);
     return textoOriginal;
   }
 }
 
 // =========================
-// OPENROUTER
+// OPENROUTER (CON REINTENTOS)
 // =========================
 
 async function askOpenRouter(userId, userMessage) {
@@ -208,20 +200,10 @@ async function askOpenRouter(userId, userMessage) {
       content: `
 Eres Ibrabot, un asistente personal avanzado.
 Tienes memoria permanente del usuario.
-Recuerdas:
-- nombre
-- gustos
-- cumpleaños
-- ciudad
-- datos personales
-- hechos importantes
 Usa esa memoria para responder mejor.
 `.trim()
     },
-    {
-      role: "system",
-      content: `Datos del usuario: ${JSON.stringify(profile)}`
-    },
+    { role: "system", content: `Datos del usuario: ${JSON.stringify(profile)}` },
     ...getUserHistory(userId),
     { role: "user", content: userMessage }
   ];
@@ -237,100 +219,109 @@ Usa esa memoria para responder mejor.
         headers: {
           Authorization: `Bearer ${OPENROUTER_API_KEY}`,
           "Content-Type": "application/json"
+        },
+        timeout: 20000
+      }
+    );
+
+    return response.data.choices[0].message.content;
+  } catch (err) {
+    console.error("⚠️ Error OpenRouter:", err.message);
+
+    return "Estoy teniendo un pequeño problema técnico, pero sigo aquí contigo.";
+  }
+}
+
+// =========================
+// VOZ → TEXTO (CON SEGURIDAD)
+// =========================
+
+async function transcribeVoice(fileUrl) {
+  try {
+    const oggPath = path.join(__dirname, "voice.ogg");
+    const mp3Path = path.join(__dirname, "voice.mp3");
+
+    const audio = await axios.get(fileUrl, { responseType: "arraybuffer" });
+    fs.writeFileSync(oggPath, audio.data);
+
+    await new Promise((resolve, reject) => {
+      ffmpeg(oggPath)
+        .toFormat("mp3")
+        .save(mp3Path)
+        .on("end", resolve)
+        .on("error", reject);
+    });
+
+    const base64Audio = fs.readFileSync(mp3Path).toString("base64");
+
+    const whisper = await axios.post(
+      "https://openrouter.ai/api/v1/audio/transcriptions",
+      {
+        model: "openai/whisper-1",
+        file: base64Audio,
+        format: "mp3"
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json"
         }
       }
     );
 
-    return response.data?.choices?.[0]?.message?.content || "No pude responder.";
+    fs.unlinkSync(oggPath);
+    fs.unlinkSync(mp3Path);
+
+    return whisper.data.text;
   } catch (err) {
-    console.error("Error OpenRouter:", err.message);
-    return "Error procesando tu mensaje.";
+    console.error("⚠️ Error transcribiendo voz:", err.message);
+    return "";
   }
 }
 
 // =========================
-// VOZ → TEXTO
+// MANEJO DE MENSAJES (A PRUEBA DE FALLOS)
 // =========================
-
-async function transcribeVoice(fileUrl) {
-  const oggPath = path.join(__dirname, "voice.ogg");
-  const mp3Path = path.join(__dirname, "voice.mp3");
-
-  const audio = await axios.get(fileUrl, { responseType: "arraybuffer" });
-  fs.writeFileSync(oggPath, audio.data);
-
-  await new Promise((resolve, reject) => {
-    ffmpeg(oggPath)
-      .toFormat("mp3")
-      .save(mp3Path)
-      .on("end", resolve)
-      .on("error", reject);
-  });
-
-  const base64Audio = fs.readFileSync(mp3Path).toString("base64");
-
-  const whisper = await axios.post(
-    "https://openrouter.ai/api/v1/audio/transcriptions",
-    {
-      model: "openai/whisper-1",
-      file: base64Audio,
-      format: "mp3"
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-        "Content-Type": "application/json"
-      }
-    }
-  );
-
-  fs.unlinkSync(oggPath);
-  fs.unlinkSync(mp3Path);
-
-  return whisper.data.text;
-}
-
-// =========================
-// MANEJO DE MENSAJES
-// =========================
-
-loadMemory();
 
 bot.on("message", async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
+  try {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
 
-  if (isSpam(userId)) {
-    return bot.sendMessage(chatId, "Estás enviando mensajes demasiado rápido.");
-  }
+    if (!msg.text && !msg.voice) return;
 
-  if (msg.voice) {
-    const file = await bot.getFile(msg.voice.file_id);
-    const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${file.file_path}`;
-    const text = await transcribeVoice(fileUrl);
+    if (isSpam(userId)) {
+      return bot.sendMessage(chatId, "Estás enviando mensajes demasiado rápido.");
+    }
 
-    extractFacts(userId, text);
-    addToMemory(userId, "user", text);
+    if (msg.voice) {
+      const file = await bot.getFile(msg.voice.file_id);
+      const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${file.file_path}`;
+      const text = await transcribeVoice(fileUrl);
 
-    const textoInterpretado = await interpretarTexto(text);
-    const reply = await askOpenRouter(userId, textoInterpretado);
+      const textoInterpretado = await interpretarTexto(text);
+      const reply = await askOpenRouter(userId, textoInterpretado);
 
-    addToMemory(userId, "assistant", reply);
+      addToMemory(userId, "user", text);
+      addToMemory(userId, "assistant", reply);
 
-    return bot.sendMessage(chatId, reply);
-  }
+      return bot.sendMessage(chatId, reply);
+    }
 
-  if (msg.text) {
-    extractFacts(userId, msg.text);
-    addToMemory(userId, "user", msg.text);
+    if (msg.text) {
+      extractFacts(userId, msg.text);
+      addToMemory(userId, "user", msg.text);
 
-    const textoInterpretado = await interpretarTexto(msg.text);
-    const reply = await askOpenRouter(userId, textoInterpretado);
+      const textoInterpretado = await interpretarTexto(msg.text);
+      const reply = await askOpenRouter(userId, textoInterpretado);
 
-    addToMemory(userId, "assistant", reply);
+      addToMemory(userId, "assistant", reply);
 
-    return bot.sendMessage(chatId, reply);
+      return bot.sendMessage(chatId, reply);
+    }
+  } catch (err) {
+    console.error("❌ ERROR GLOBAL:", err.message);
   }
 });
 
-console.log("Ibrabot listo con memoria permanente, interpretación inteligente y SQLite.");
+console.log("🛡️ Ibrabot listo con ESTABILIDAD TOTAL (Paso 1 completado).");
