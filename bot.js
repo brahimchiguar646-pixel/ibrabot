@@ -176,3 +176,4 @@ bot.on('message', async (msg) => {
 });
 
 console.log('Ibrabot está corriendo con memoria por usuario y respuestas inteligentes.');
+
