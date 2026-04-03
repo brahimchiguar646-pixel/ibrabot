@@ -452,19 +452,14 @@ function detectarComandoOrganizacion(texto) {
 async function askOpenRouter(userId, userMessage) {
   const deepProfile = await loadDeepProfile(userId);
 
-  // 1) Detectar si es una pregunta de memoria directa
+  // 1) Preguntas de memoria directa
   const tipo = detectarTipoPregunta(userMessage);
   if (tipo) {
     const directa = responderDesdeMemoria(tipo, deepProfile);
     if (directa) return directa;
   }
 
-  // 2) Detectar si el mensaje es una tarea
-  if (detectarTarea(userMessage)) {
-    return "Perfecto, lo guardo como tarea.";
-  }
-
-  // 3) Comandos de organización
+  // 2) Comandos de organización (ANTES que tareas)
   const comando = detectarComandoOrganizacion(userMessage);
   if (comando) {
     const tasks = await loadTasks(userId);
@@ -527,6 +522,11 @@ async function askOpenRouter(userId, userMessage) {
       });
       return out;
     }
+  }
+
+  // 3) Detectar si el mensaje es una tarea (DESPUÉS de comandos)
+  if (detectarTarea(userMessage)) {
+    return "Perfecto, lo guardo como tarea.";
   }
 
   const messages = [
@@ -719,4 +719,4 @@ bot.on("message", async (msg) => {
   }
 });
 
-console.log("⚡ Ibrabot listo: memoria profunda + experto premium + tareas (bloques 1 y 2).");
+console.log("⚡ Ibrabot listo: memoria profunda + experto premium + tareas (bloques 1 y 2 corregidos).");
