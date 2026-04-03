@@ -90,6 +90,64 @@ function loadDeepProfile(userId) {
 }
 
 // =========================
+// LECTURA DE TAREAS DESDE SQLITE
+// =========================
+
+function loadTasks(userId) {
+  return new Promise((resolve) => {
+    try {
+      db.all(
+        `SELECT value FROM deep_memory WHERE userId = ? AND category = 'tareas'`,
+        [userId],
+        (err, rows) => {
+          if (err) {
+            console.error("❌ Error leyendo tareas:", err.message);
+            return resolve([]);
+          }
+
+          const tasks = rows
+            .map(r => {
+              try {
+                return JSON.parse(r.value);
+              } catch {
+                return null;
+              }
+            })
+            .filter(Boolean);
+
+          resolve(tasks);
+        }
+      );
+    } catch (err) {
+      console.error("❌ Error leyendo tareas:", err.message);
+      resolve([]);
+    }
+  });
+}
+
+function getTodayDate() {
+  const d = new Date();
+  return d.toISOString().split("T")[0];
+}
+
+function getTomorrowDate() {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  return d.toISOString().split("T")[0];
+}
+
+function filterTasksByDate(tasks, date) {
+  return tasks.filter(t => t.fecha === date);
+}
+
+function sortTasks(tasks) {
+  return tasks.sort((a, b) => {
+    if (a.hora && b.hora) return a.hora.localeCompare(b.hora);
+    return 0;
+  });
+}
+
+// =========================
 // HISTORIAL CORTO
 // =========================
 
@@ -372,6 +430,22 @@ function detectarTarea(texto) {
 }
 
 // =========================
+// DETECTOR DE COMANDOS DE ORGANIZACIÓN
+// =========================
+
+function detectarComandoOrganizacion(texto) {
+  const t = (texto || "").toLowerCase();
+
+  if (t.includes("qué tengo hoy") || t.includes("que tengo hoy")) return "hoy";
+  if (t.includes("qué tengo mañana") || t.includes("que tengo mañana")) return "mañana";
+  if (t.includes("organízame el día") || t.includes("organizame el dia")) return "organizar";
+  if (t.includes("qué hago primero") || t.includes("que hago primero")) return "primero";
+  if (t.includes("mis tareas") || t.includes("tareas pendientes")) return "todas";
+
+  return null;
+}
+
+// =========================
 // OPENROUTER — RESPUESTA INTELIGENTE (EXPERTO PREMIUM)
 // =========================
 
@@ -388,6 +462,71 @@ async function askOpenRouter(userId, userMessage) {
   // 2) Detectar si el mensaje es una tarea
   if (detectarTarea(userMessage)) {
     return "Perfecto, lo guardo como tarea.";
+  }
+
+  // 3) Comandos de organización
+  const comando = detectarComandoOrganizacion(userMessage);
+  if (comando) {
+    const tasks = await loadTasks(userId);
+
+    if (comando === "hoy") {
+      const hoy = getTodayDate();
+      const lista = sortTasks(filterTasksByDate(tasks, hoy));
+
+      if (lista.length === 0) return "Hoy no tienes tareas registradas.";
+
+      let out = "Tus tareas de hoy:\n";
+      lista.forEach(t => {
+        out += `• ${t.accion}${t.hora ? " a las " + t.hora : ""}\n`;
+      });
+      return out;
+    }
+
+    if (comando === "mañana") {
+      const mañana = getTomorrowDate();
+      const lista = sortTasks(filterTasksByDate(tasks, mañana));
+
+      if (lista.length === 0) return "Mañana no tienes tareas registradas.";
+
+      let out = "Tus tareas de mañana:\n";
+      lista.forEach(t => {
+        out += `• ${t.accion}${t.hora ? " a las " + t.hora : ""}\n`;
+      });
+      return out;
+    }
+
+    if (comando === "organizar") {
+      const hoy = getTodayDate();
+      const lista = sortTasks(filterTasksByDate(tasks, hoy));
+
+      if (lista.length === 0) return "Hoy no tienes tareas para organizar.";
+
+      let out = "Plan para hoy:\n";
+      lista.forEach((t, i) => {
+        out += `${i + 1}. ${t.accion}${t.hora ? " a las " + t.hora : ""}\n`;
+      });
+      return out;
+    }
+
+    if (comando === "primero") {
+      const hoy = getTodayDate();
+      const lista = sortTasks(filterTasksByDate(tasks, hoy));
+
+      if (lista.length === 0) return "Hoy no tienes tareas.";
+
+      const primera = lista[0];
+      return `Lo primero que debes hacer hoy es: ${primera.accion}${primera.hora ? " a las " + primera.hora : ""}.`;
+    }
+
+    if (comando === "todas") {
+      if (tasks.length === 0) return "No tienes tareas registradas.";
+
+      let out = "Tus tareas pendientes:\n";
+      tasks.forEach(t => {
+        out += `• ${t.accion}${t.fecha ? " (" + t.fecha + ")" : ""}${t.hora ? " a las " + t.hora : ""}\n`;
+      });
+      return out;
+    }
   }
 
   const messages = [
@@ -580,4 +719,4 @@ bot.on("message", async (msg) => {
   }
 });
 
-console.log("⚡ Ibrabot listo: memoria profunda + respuestas directas + experto premium + tareas (bloque 1).");
+console.log("⚡ Ibrabot listo: memoria profunda + experto premium + tareas (bloques 1 y 2).");
