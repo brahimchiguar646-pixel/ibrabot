@@ -148,6 +148,94 @@ function sortTasks(tasks) {
 }
 
 // =========================
+// PARSEO DE FECHAS Y HORAS (REAL)
+// =========================
+
+function normalizarTextoFechaHora(texto) {
+  return (texto || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+function parseFechaDesdeTexto(texto) {
+  const t = normalizarTextoFechaHora(texto);
+  const hoy = new Date();
+
+  // hoy
+  if (t.includes("hoy")) {
+    return getTodayDate();
+  }
+
+  // mañana
+  if (t.includes("mañana") || t.includes("manana")) {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    return d.toISOString().split("T")[0];
+  }
+
+  // pasado mañana
+  if (t.includes("pasado mañana") || t.includes("pasado manana")) {
+    const d = new Date();
+    d.setDate(d.getDate() + 2);
+    return d.toISOString().split("T")[0];
+  }
+
+  // días de la semana → próximo día
+  const dias = {
+    "lunes": 1,
+    "martes": 2,
+    "miercoles": 3,
+    "miércoles": 3,
+    "jueves": 4,
+    "viernes": 5,
+    "sabado": 6,
+    "sábado": 6,
+    "domingo": 0
+  };
+
+  for (const nombre in dias) {
+    if (t.includes(nombre)) {
+      const target = dias[nombre];
+      const d = new Date();
+      const hoyDia = d.getDay(); // 0 domingo, 1 lunes...
+
+      let diff = target - hoyDia;
+      if (diff <= 0) diff += 7; // próximo día
+
+      d.setDate(d.getDate() + diff);
+      return d.toISOString().split("T")[0];
+    }
+  }
+
+  // Si no detectamos nada, devolvemos null
+  return null;
+}
+
+function parseHoraDesdeTexto(texto) {
+  const t = normalizarTextoFechaHora(texto);
+
+  // Buscar patrones tipo "a las 3", "a las 15", "a las 3:30", "3:30", "15:00"
+  const regex = /(?:a las |alas |a la |a )?(\d{1,2})(?:[:h](\d{2}))?/;
+  const match = t.match(regex);
+  if (!match) return null;
+
+  let horas = parseInt(match[1], 10);
+  let minutos = match[2] ? parseInt(match[2], 10) : 0;
+
+  // Si dice "de la tarde" o "por la tarde" y la hora es < 12 → +12
+  if ((t.includes("tarde") || t.includes("noche")) && horas < 12) {
+    horas += 12;
+  }
+
+  // Si no hay contexto y la hora es entre 1 y 7, la dejamos tal cual (puede ser mañana)
+  // Si es 0 → 00
+  if (horas < 0 || horas > 23) return null;
+  if (minutos < 0 || minutos > 59) return null;
+
+  const hh = horas.toString().padStart(2, "0");
+  const mm = minutos.toString().padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
+// =========================
 // HISTORIAL CORTO
 // =========================
 
@@ -256,7 +344,7 @@ No expliques nada.
 }
 
 // =========================
-// EXTRACCIÓN DE HECHOS / TAREAS
+// EXTRACCIÓN DE HECHOS / TAREAS (CON FECHAS REALES)
 // =========================
 
 async function analizarYGuardarHechos(userId, texto) {
@@ -264,6 +352,7 @@ async function analizarYGuardarHechos(userId, texto) {
     const clean = (texto || "").trim();
     if (!clean) return;
 
+    // 1) Pedimos SOLO la acción y el texto de fecha/hora, sin que el modelo calcule fechas
     const response = await axios.post(
       "https://openrouter.ai/api/v1/chat/completions",
       {
@@ -272,12 +361,16 @@ async function analizarYGuardarHechos(userId, texto) {
           {
             role: "system",
             content: `
-Eres un módulo de memoria personal especializado en tareas.
+Eres un módulo de extracción de tareas.
 
 Tu trabajo:
 - Detectar si el usuario está diciendo una tarea.
-- Extraer acción, fecha, hora, prioridad si existe.
-- Devolver SOLO un JSON válido.
+- Extraer:
+  - accion: texto claro de lo que hay que hacer
+  - fechaTexto: texto tal cual sobre la fecha (hoy, mañana, lunes, etc.)
+  - horaTexto: texto tal cual sobre la hora (a las 3, 15:00, etc.)
+- NO calcules fechas reales, NO inventes años, NO conviertas nada.
+- Devuelve SOLO un JSON válido.
 
 Formato obligatorio:
 
@@ -285,19 +378,15 @@ Formato obligatorio:
   "tareas": [
     {
       "accion": "texto claro",
-      "fecha": "YYYY-MM-DD o null",
-      "hora": "HH:MM o null",
-      "prioridad": "alta|media|baja",
-      "estado": "pendiente"
+      "fechaTexto": "texto o null",
+      "horaTexto": "texto o null",
+      "prioridad": "alta|media|baja|null"
     }
   ]
 }
 
 Reglas:
 - Si no hay tarea, devuelve {"tareas": []}
-- Si dice “mañana”, conviértelo a fecha real.
-- Si dice “hoy”, usa la fecha actual.
-- Si dice “a las 3”, conviértelo a “15:00”.
 - No añadas nada fuera del JSON.
 `.trim()
           },
@@ -328,15 +417,18 @@ Reglas:
     for (const t of parsed.tareas) {
       if (!t.accion) continue;
 
+      const fecha = t.fechaTexto ? parseFechaDesdeTexto(t.fechaTexto) : null;
+      const hora = t.horaTexto ? parseHoraDesdeTexto(t.horaTexto) : parseHoraDesdeTexto(clean);
+
       saveDeepFact(
         userId,
         "tareas",
         "tarea",
         JSON.stringify({
           accion: t.accion,
-          fecha: t.fecha,
-          hora: t.hora,
-          prioridad: t.prioridad,
+          fecha: fecha,
+          hora: hora,
+          prioridad: t.prioridad || null,
           estado: "pendiente"
         })
       );
@@ -413,17 +505,8 @@ function detectarTarea(texto) {
     "debo",
     "debería",
     "quiero hacer",
-    "mañana",
-    "hoy",
-    "esta semana",
-    "el lunes",
-    "el martes",
-    "el miércoles",
-    "el jueves",
-    "el viernes",
-    "el sábado",
-    "el domingo",
-    "a las "
+    "tarea:",
+    "tareas:"
   ];
 
   return patrones.some(p => t.includes(p));
@@ -719,4 +802,4 @@ bot.on("message", async (msg) => {
   }
 });
 
-console.log("⚡ Ibrabot listo: memoria profunda + experto premium + tareas (bloques 1 y 2 corregidos).");
+console.log("⚡ Ibrabot listo: memoria profunda + experto premium + tareas con FECHAS REALES.");
