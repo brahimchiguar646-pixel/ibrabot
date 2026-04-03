@@ -198,7 +198,7 @@ No expliques nada.
 }
 
 // =========================
- // EXTRACCIÓN DE HECHOS
+// EXTRACCIÓN DE HECHOS / TAREAS
 // =========================
 
 async function analizarYGuardarHechos(userId, texto) {
@@ -214,20 +214,33 @@ async function analizarYGuardarHechos(userId, texto) {
           {
             role: "system",
             content: `
-Eres un módulo de memoria personal.
-Extraes hechos importantes y devuelves SOLO un JSON:
+Eres un módulo de memoria personal especializado en tareas.
+
+Tu trabajo:
+- Detectar si el usuario está diciendo una tarea.
+- Extraer acción, fecha, hora, prioridad si existe.
+- Devolver SOLO un JSON válido.
+
+Formato obligatorio:
 
 {
-  "facts": [
+  "tareas": [
     {
-      "category": "personas|gustos|proyectos|rutinas|lugares|tareas|objetivos|preferencias|otros",
-      "key": "etiqueta",
-      "value": "hecho claro"
+      "accion": "texto claro",
+      "fecha": "YYYY-MM-DD o null",
+      "hora": "HH:MM o null",
+      "prioridad": "alta|media|baja",
+      "estado": "pendiente"
     }
   ]
 }
 
-No añadas nada fuera del JSON.
+Reglas:
+- Si no hay tarea, devuelve {"tareas": []}
+- Si dice “mañana”, conviértelo a fecha real.
+- Si dice “hoy”, usa la fecha actual.
+- Si dice “a las 3”, conviértelo a “15:00”.
+- No añadas nada fuera del JSON.
 `.trim()
           },
           { role: "user", content: clean }
@@ -248,18 +261,30 @@ No añadas nada fuera del JSON.
     try {
       parsed = JSON.parse(raw);
     } catch {
-      console.error("⚠️ No se pudo parsear JSON.");
+      console.error("⚠️ No se pudo parsear JSON de tareas.");
       return;
     }
 
-    if (!parsed.facts || !Array.isArray(parsed.facts)) return;
+    if (!parsed.tareas || !Array.isArray(parsed.tareas)) return;
 
-    for (const fact of parsed.facts) {
-      if (!fact.category || !fact.key || !fact.value) continue;
-      saveDeepFact(userId, fact.category, fact.key, fact.value);
+    for (const t of parsed.tareas) {
+      if (!t.accion) continue;
+
+      saveDeepFact(
+        userId,
+        "tareas",
+        "tarea",
+        JSON.stringify({
+          accion: t.accion,
+          fecha: t.fecha,
+          hora: t.hora,
+          prioridad: t.prioridad,
+          estado: "pendiente"
+        })
+      );
     }
   } catch (err) {
-    console.error("⚠️ Error analizando hechos:", err.message);
+    console.error("⚠️ Error analizando tareas:", err.message);
   }
 }
 
@@ -319,6 +344,34 @@ function responderDesdeMemoria(tipo, deepProfile) {
 }
 
 // =========================
+// DETECTOR DE TAREAS
+// =========================
+
+function detectarTarea(texto) {
+  const t = (texto || "").toLowerCase();
+
+  const patrones = [
+    "tengo que",
+    "debo",
+    "debería",
+    "quiero hacer",
+    "mañana",
+    "hoy",
+    "esta semana",
+    "el lunes",
+    "el martes",
+    "el miércoles",
+    "el jueves",
+    "el viernes",
+    "el sábado",
+    "el domingo",
+    "a las "
+  ];
+
+  return patrones.some(p => t.includes(p));
+}
+
+// =========================
 // OPENROUTER — RESPUESTA INTELIGENTE (EXPERTO PREMIUM)
 // =========================
 
@@ -330,6 +383,11 @@ async function askOpenRouter(userId, userMessage) {
   if (tipo) {
     const directa = responderDesdeMemoria(tipo, deepProfile);
     if (directa) return directa;
+  }
+
+  // 2) Detectar si el mensaje es una tarea
+  if (detectarTarea(userMessage)) {
+    return "Perfecto, lo guardo como tarea.";
   }
 
   const messages = [
@@ -405,7 +463,6 @@ FORMATO RECOMENDADO (cuando tenga sentido):
 
     const text = response.data.choices[0].message.content.trim();
 
-    // Filtro extra: si aún así devuelve una frase genérica, la sustituimos
     const gen = text.toLowerCase();
     const esGenerica =
       gen.includes("en qué puedo ayudarte") ||
@@ -523,4 +580,4 @@ bot.on("message", async (msg) => {
   }
 });
 
-console.log("⚡ Ibrabot listo: memoria profunda + respuestas directas + modo experto premium.");
+console.log("⚡ Ibrabot listo: memoria profunda + respuestas directas + experto premium + tareas (bloque 1).");
