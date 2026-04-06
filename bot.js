@@ -23,7 +23,7 @@ if (!TELEGRAM_TOKEN || !OPENROUTER_API_KEY) {
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
 // =========================
-/* SQLITE: MEMORIA PROFUNDA */
+// SQLITE: MEMORIA PROFUNDA
 // =========================
 
 let db;
@@ -213,8 +213,8 @@ function parseHoraDesdeTexto(texto) {
   let horas = parseInt(match[1], 10);
   let minutos = match[2] ? parseInt(match[2], 10) : 0;
 
-  const tieneManana = t.includes("de la mañana") || t.includes("de la manana") || t.includes("por la mañana") || t.includes("por la manana") || t.includes("am ");
-  const tieneTarde = t.includes("de la tarde") || t.includes("por la tarde") || t.includes("pm ") || t.includes("noche");
+  const tieneManana = t.includes("de la mañana") || t.includes("de la manana") || t.includes("por la mañana") || t.includes("por la manana") || t.includes(" am") || t.endsWith("am");
+  const tieneTarde = t.includes("de la tarde") || t.includes("por la tarde") || t.includes(" pm") || t.endsWith("pm") || t.includes("noche");
 
   if (tieneManana && horas === 12) horas = 0;
   if (tieneTarde && horas < 12) horas += 12;
@@ -230,6 +230,19 @@ function parseHoraDesdeTexto(texto) {
   const hh = horas.toString().padStart(2, "0");
   const mm = minutos.toString().padStart(2, "0");
   return `${hh}:${mm}`;
+}
+
+// extrae hora base (número) aunque no haya mañana/tarde
+function extraerHoraBase(texto) {
+  const t = normalizarTextoFechaHora(texto);
+  const regex = /(\d{1,2})(?:[:h](\d{2}))?/;
+  const match = t.match(regex);
+  if (!match) return null;
+  const h = parseInt(match[1], 10);
+  const m = match[2] ? parseInt(match[2], 10) : 0;
+  if (h < 0 || h > 23) return null;
+  if (m < 0 || m > 59) return null;
+  return { h, m };
 }
 
 // =========================
@@ -344,10 +357,10 @@ No expliques nada.
 // ESTADO: PENDIENTE DE HORA
 // =========================
 
-const pendingTime = {}; // userId -> { accion, fecha, prioridad }
+const pendingTime = {}; // userId -> { accion, fecha, prioridad, baseHora }
 
 // =========================
-// EXTRACCIÓN DE TAREAS (SIN FECHAS INVENTADAS)
+// EXTRACCIÓN DE TAREAS
 // =========================
 
 async function analizarYGuardarHechos(userId, texto) {
@@ -355,41 +368,8 @@ async function analizarYGuardarHechos(userId, texto) {
     const clean = (texto || "").trim();
     if (!clean) return;
 
-    // Si el usuario está respondiendo a una pregunta de hora
-    if (pendingTime[userId]) {
-      const hora = parseHoraDesdeTexto(clean);
-      if (!hora) {
-        return; // no guardamos nada si sigue ambiguo
-      }
+    // Aquí NO resolvemos pendingTime, eso se hace en askOpenRouter
 
-      const { accion, fecha, prioridad } = pendingTime[userId];
-      delete pendingTime[userId];
-
-      // Evitar duplicados
-      const tasks = await loadTasks(userId);
-      const existe = tasks.some(t =>
-        t.accion === accion &&
-        t.fecha === fecha &&
-        t.hora === hora
-      );
-      if (existe) return;
-
-      saveDeepFact(
-        userId,
-        "tareas",
-        "tarea",
-        JSON.stringify({
-          accion,
-          fecha,
-          hora,
-          prioridad: prioridad || null,
-          estado: "pendiente"
-        })
-      );
-      return;
-    }
-
-    // 1) Pedimos SOLO acción + texto de fecha/hora
     const response = await axios.post(
       "https://openrouter.ai/api/v1/chat/completions",
       {
@@ -456,21 +436,30 @@ Reglas:
       if (!t.accion) continue;
 
       const fecha = t.fechaTexto ? parseFechaDesdeTexto(t.fechaTexto) : null;
-      let hora = t.horaTexto ? parseHoraDesdeTexto(t.horaTexto) : parseHoraDesdeTexto(clean);
+      let hora = null;
 
-      // Si hay indicios de hora pero es ambigua → preguntar
-      const hayNumeroHora = /\b\d{1,2}(\:\d{2})?\b/.test(normalizarTextoFechaHora(clean));
+      if (t.horaTexto) {
+        hora = parseHoraDesdeTexto(t.horaTexto);
+      }
+      if (!hora) {
+        hora = parseHoraDesdeTexto(clean);
+      }
+
+      const base = extraerHoraBase(clean);
+
+      // Si hay número de hora pero es ambigua → preguntar luego
+      const hayNumeroHora = !!base;
       if (hayNumeroHora && !hora) {
         pendingTime[userId] = {
           accion: t.accion,
           fecha: fecha || getTodayDate(),
-          prioridad: t.prioridad || null
+          prioridad: t.prioridad || null,
+          baseHora: base
         };
-        // La respuesta al usuario la gestiona askOpenRouter
         return;
       }
 
-      // Evitar duplicados
+      // Si no hay hora en absoluto, guardamos sin hora
       const tasks = await loadTasks(userId);
       const existe = tasks.some(task =>
         task.accion === t.accion &&
@@ -595,22 +584,45 @@ function detectarComandoOrganizacion(texto) {
 async function askOpenRouter(userId, userMessage) {
   const deepProfile = await loadDeepProfile(userId);
 
-  // 0) Si hay una hora pendiente, la respuesta del usuario es para eso
+  // 0) Resolver hora pendiente
   if (pendingTime[userId]) {
-    const hora = parseHoraDesdeTexto(userMessage);
-    if (!hora) {
-      return "¿Te refieres a las 3 de la mañana o a las 3 de la tarde?";
+    const t = normalizarTextoFechaHora(userMessage);
+    const { accion, fecha, prioridad, baseHora } = pendingTime[userId];
+
+    if (!baseHora) {
+      delete pendingTime[userId];
+      return "No he podido entender bien la hora, repite la frase completa con la hora, por ejemplo: \"mañana a las 3 de la tarde\".";
     }
 
-    const { accion, fecha, prioridad } = pendingTime[userId];
-    delete pendingTime[userId];
+    let horas = baseHora.h;
+    let minutos = baseHora.m;
+
+    const tieneManana = t.includes("manana") || t.includes("mañana") || t.includes("por la mañana") || t.includes("por la manana") || t.includes(" am") || t.endsWith("am");
+    const tieneTarde = t.includes("tarde") || t.includes("noche") || t.includes(" pm") || t.endsWith("pm");
+
+    if (!tieneManana && !tieneTarde) {
+      return "¿Te refieres a las " + baseHora.h + " de la mañana o a las " + baseHora.h + " de la tarde?";
+    }
+
+    if (tieneManana && horas === 12) horas = 0;
+    if (tieneTarde && horas < 12) horas += 12;
+
+    if (horas < 0 || horas > 23) {
+      delete pendingTime[userId];
+      return "La hora que entiendo no es válida, repite la frase con la hora clara.";
+    }
+
+    const hh = horas.toString().padStart(2, "0");
+    const mm = minutos.toString().padStart(2, "0");
+    const horaFinal = `${hh}:${mm}`;
 
     const tasks = await loadTasks(userId);
-    const existe = tasks.some(t =>
-      t.accion === accion &&
-      t.fecha === fecha &&
-      t.hora === hora
+    const existe = tasks.some(tk =>
+      tk.accion === accion &&
+      tk.fecha === fecha &&
+      tk.hora === horaFinal
     );
+
     if (!existe) {
       saveDeepFact(
         userId,
@@ -619,14 +631,15 @@ async function askOpenRouter(userId, userMessage) {
         JSON.stringify({
           accion,
           fecha,
-          hora,
+          hora: horaFinal,
           prioridad: prioridad || null,
           estado: "pendiente"
         })
       );
     }
 
-    return `Perfecto, lo apunto: ${accion} el ${fecha} a las ${hora}.`;
+    delete pendingTime[userId];
+    return `Perfecto, lo apunto: ${accion} el ${fecha}${horaFinal ? " a las " + horaFinal : ""}.`;
   }
 
   // 1) Preguntas de memoria directa
@@ -703,7 +716,6 @@ async function askOpenRouter(userId, userMessage) {
 
   // 3) Detectar si el mensaje es una tarea
   if (detectarTarea(userMessage)) {
-    // Si hay hora ambigua, la lógica de preguntar ya se disparó en analizarYGuardarHechos
     return "Perfecto, lo guardo como tarea.";
   }
 
@@ -726,19 +738,10 @@ ESTILO:
 - Claro, directo y concreto.
 - Sin frases vacías ni relleno.
 - Siempre orientado a la acción: qué hacer ahora, hoy, esta semana.
-- Puedes ajustar tu forma de hablar: si el usuario te pide "sé más claro", "sé más corto", "explícalo mejor", lo aplicas en las siguientes respuestas.
+- Si el usuario te pide "sé más claro", "sé más corto", "explícalo mejor", ajustas tu estilo.
 
 MODOS INTERNOS (no los nombres):
-- PLAN: devuelves pasos claros y ordenados.
-- ANÁLISIS: explicas el problema en 3-5 puntos clave.
-- PRIORIDADES: ordenas qué hacer primero, segundo, tercero.
-- IDEAS: das ideas concretas, accionables.
-- RESUMEN: devuelves lo esencial.
-- DECISIÓN: comparas opciones y recomiendas una, explicando por qué.
-
-IMPORTANTE:
-- Piensa con lógica, como si tuvieras una vida y experiencia: no respondas cosas obvias o vacías.
-- Si el usuario está confuso, primero ordena su situación y luego propones un plan.
+- PLAN, ANÁLISIS, PRIORIDADES, IDEAS, RESUMEN, DECISIÓN.
 `.trim()
     },
     {
@@ -867,4 +870,4 @@ bot.on("message", async (msg) => {
   }
 });
 
-console.log("⚡ Ibrabot listo: memoria profunda + tareas con fechas reales + razonamiento y organización.");
+console.log("⚡ Ibrabot listo: memoria profunda + tareas con fechas reales + hora inteligente sin bucles.");
