@@ -97,7 +97,7 @@ function loadTasks(userId) {
   return new Promise((resolve) => {
     try {
       db.all(
-        `SELECT value FROM deep_memory WHERE userId = ? AND category = 'tareas'`,
+        `SELECT rowid AS id, value FROM deep_memory WHERE userId = ? AND category = 'tareas'`,
         [userId],
         (err, rows) => {
           if (err) {
@@ -108,7 +108,9 @@ function loadTasks(userId) {
           const tasks = rows
             .map(r => {
               try {
-                return JSON.parse(r.value);
+                const obj = JSON.parse(r.value);
+                obj._id = r.id;
+                return obj;
               } catch {
                 return null;
               }
@@ -121,6 +123,29 @@ function loadTasks(userId) {
     } catch (err) {
       console.error("❌ Error leyendo tareas:", err.message);
       resolve([]);
+    }
+  });
+}
+
+function updateTaskRow(id, newTaskObj) {
+  return new Promise((resolve) => {
+    try {
+      const now = Date.now();
+      db.run(
+        `
+        UPDATE deep_memory
+        SET value = ?, updatedAt = ?
+        WHERE rowid = ?
+        `,
+        [JSON.stringify(newTaskObj), now, id],
+        (err) => {
+          if (err) console.error("❌ Error actualizando tarea:", err.message);
+          resolve();
+        }
+      );
+    } catch (err) {
+      console.error("❌ Error actualizando tarea:", err.message);
+      resolve();
     }
   });
 }
@@ -220,7 +245,6 @@ function parseHoraDesdeTexto(texto) {
   if (tieneTarde && horas < 12) horas += 12;
 
   if (!tieneManana && !tieneTarde) {
-    // Ambiguo → devolvemos null para que el bot pregunte
     return null;
   }
 
@@ -232,7 +256,6 @@ function parseHoraDesdeTexto(texto) {
   return `${hh}:${mm}`;
 }
 
-// extrae hora base (número) aunque no haya mañana/tarde
 function extraerHoraBase(texto) {
   const t = normalizarTextoFechaHora(texto);
   const regex = /(\d{1,2})(?:[:h](\d{2}))?/;
@@ -368,8 +391,6 @@ async function analizarYGuardarHechos(userId, texto) {
     const clean = (texto || "").trim();
     if (!clean) return;
 
-    // Aquí NO resolvemos pendingTime, eso se hace en askOpenRouter
-
     const response = await axios.post(
       "https://openrouter.ai/api/v1/chat/completions",
       {
@@ -446,9 +467,8 @@ Reglas:
       }
 
       const base = extraerHoraBase(clean);
-
-      // Si hay número de hora pero es ambigua → preguntar luego
       const hayNumeroHora = !!base;
+
       if (hayNumeroHora && !hora) {
         pendingTime[userId] = {
           accion: t.accion,
@@ -459,14 +479,13 @@ Reglas:
         return;
       }
 
-      // Si no hay hora en absoluto, guardamos sin hora
       const tasks = await loadTasks(userId);
-      const existe = tasks.some(task =>
+      const igual = tasks.find(task =>
         task.accion === t.accion &&
         task.fecha === fecha &&
         task.hora === hora
       );
-      if (existe) continue;
+      if (igual) continue;
 
       saveDeepFact(
         userId,
@@ -601,7 +620,7 @@ async function askOpenRouter(userId, userMessage) {
     const tieneTarde = t.includes("tarde") || t.includes("noche") || t.includes(" pm") || t.endsWith("pm");
 
     if (!tieneManana && !tieneTarde) {
-      return "¿Te refieres a las " + baseHora.h + " de la mañana o a las " + baseHora.h + " de la tarde?";
+      return `¿Te refieres a las ${baseHora.h} de la mañana o a las ${baseHora.h} de la tarde?`;
     }
 
     if (tieneManana && horas === 12) horas = 0;
@@ -617,13 +636,19 @@ async function askOpenRouter(userId, userMessage) {
     const horaFinal = `${hh}:${mm}`;
 
     const tasks = await loadTasks(userId);
-    const existe = tasks.some(tk =>
-      tk.accion === accion &&
-      tk.fecha === fecha &&
-      tk.hora === horaFinal
+
+    // Buscar tarea con misma acción y fecha (aunque tenga otra hora)
+    const mismaAccionFecha = tasks.filter(
+      tk => tk.accion === accion && tk.fecha === fecha
     );
 
-    if (!existe) {
+    if (mismaAccionFecha.length > 0) {
+      // Actualizar la primera que coincida
+      const target = mismaAccionFecha[0];
+      target.hora = horaFinal;
+      await updateTaskRow(target._id, target);
+    } else {
+      // No existe → crear
       saveDeepFact(
         userId,
         "tareas",
@@ -639,7 +664,7 @@ async function askOpenRouter(userId, userMessage) {
     }
 
     delete pendingTime[userId];
-    return `Perfecto, lo apunto: ${accion} el ${fecha}${horaFinal ? " a las " + horaFinal : ""}.`;
+    return `Perfecto, lo apunto: ${accion} el ${fecha} a las ${horaFinal}.`;
   }
 
   // 1) Preguntas de memoria directa
@@ -870,4 +895,5 @@ bot.on("message", async (msg) => {
   }
 });
 
-console.log("⚡ Ibrabot listo: memoria profunda + tareas con fechas reales + hora inteligente sin bucles.");
+console.log("⚡ Ibrabot listo: memoria profunda + tareas con fechas reales + hora inteligente con corrección automática.");
+
