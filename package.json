@@ -1,16 +1,22 @@
 {
   "name": "ibrabot",
-  "version": "1.0.0",
-  "description": "Telegram bot with memory, SQLite, voice and OpenRouter integration",
+  "version": "2.0.0",
+  "description": "Ibrabot PRO — autonomous Telegram assistant with memory, tasks, voice, web, integrations and agent confirmation flow",
   "main": "bot.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node bot.js",
+    "test": "node tests/memory.test.js && node tests/tasks.test.js",
+    "test:memory": "node tests/memory.test.js",
+    "test:tasks": "node tests/tasks.test.js"
   },
   "dependencies": {
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "axios": "^1.6.7",
+    "cheerio": "^1.2.0",
     "dotenv": "^16.4.5",
+    "express": "^5.2.1",
     "fluent-ffmpeg": "^2.1.2",
+    "node-cron": "^4.2.1",
     "node-telegram-bot-api": "0.67.0",
     "sqlite3": "5.1.6"
   }

@@ -1,0 +1,208 @@
+Quiero que actúes como un programador senior experto en agentes autónomos, asistentes personales, bots de Telegram y automatización.
+Estamos completando un proyecto existente llamado IBRABOT. Tu misión es convertirlo en un agente autónomo PRO que yo controle totalmente.
+
+Objetivos generales
+
+Analizar el repositorio y entender la arquitectura actual.
+
+Proponer una arquitectura moderna, modular y segura.
+
+Implementar módulos completos: voz, navegación web segura, memoria avanzada, ejecución de tareas, integración con APIs oficiales (Canva API, WhatsApp Business API, OpenRouter u otros), generación de código, creación de apps y despliegue.
+
+Crear tests básicos y pipelines de CI/CD.
+
+Hacer commits claros y crear PRs cuando corresponda.
+
+Restricciones y seguridad
+
+No intentar acceder a cuentas privadas sin tokens oficiales y consentimiento explícito.
+
+Usar siempre almacenamiento seguro para secretos (secrets manager).
+
+Todas las acciones que impliquen acceso externo deben requerir mi confirmación o un token que yo proporcione.
+
+Requisitos funcionales prioritarios
+
+Procesamiento de audio: speech-to-text y respuesta por texto; opción de TTS.
+
+Navegación web segura: lectura y extracción de datos; no iniciar sesión en sitios privados.
+
+Generación de código y apps: scaffolding para web apps (Node/Express, React), generación de endpoints y front.
+
+Creación de diseños y mapas mentales: integración con APIs oficiales (Canva u otras) usando tokens que yo proporcione.
+
+Memoria avanzada: perfiles, contexto conversacional, persistencia en SQLite o similar.
+
+Tareas y recordatorios: scheduler interno y notificaciones vía Telegram o WhatsApp Business API (con número Business).
+
+Agente autónomo controlado: ejecutar flujos complejos tras mi confirmación; logs y reversión de cambios.
+
+Entrega y metodología
+
+Trabaja por fases. Antes de cada fase, explica qué archivos vas a tocar y por qué.
+
+Implementa, añade tests básicos, haz commit con mensaje claro y crea PR o branch.
+
+Mantén un changelog simple en CHANGELOG.md.
+
+Empieza ahora: analiza el repo, devuelve un resumen de la estructura y una propuesta de plan por fases. Luego implementa la Fase 1 (entorno, dependencias, secrets, tests básicos) y confirma cuando esté listo.
+
+Plan por fases y entregables
+Fase 0 Preparación
+
+Entregable: README.md actualizado, CHANGELOG.md, CONTRIBUTING.md.
+
+Acciones: instalar dependencias, configurar env.example, configurar secrets en Replit/GitHub.
+
+Fase 1 Núcleo y seguridad
+
+Entregable: entorno ejecutable localmente y en Replit; scripts para start/test.
+
+Acciones: validar package.json, añadir dotenv, configurar secrets manager, tests básicos.
+
+Fase 2 Memoria avanzada
+
+Entregable: módulo memory/ con memory.db (SQLite) y memory.js API.
+
+Acciones: CRUD de memoria, perfiles, expiración, backup automático.
+
+Fase 3 Voz y audio
+
+Entregable: módulo voice/ con STT y TTS wrappers (opcional: OpenAI Whisper, Google Speech).
+
+Acciones: endpoints para subir audio, transcribir, guardar en memoria, respuesta.
+
+Fase 4 Navegación web y scraping seguro
+
+Entregable: módulo web/ con navegador headless read-only (puede usar puppeteer en modo sin login) y extractor de datos.
+
+Acciones: funciones para fetch + parse, límites y politeness (rate limit).
+
+Fase 5 Integraciones externas
+
+Entregable: adaptadores en integrations/ para Canva API, WhatsApp Business API, OpenRouter.
+
+Acciones: plantillas de uso, ejemplos de llamadas, manejo de tokens en secrets.
+
+Fase 6 Generación de apps y código
+
+Entregable: comandos CLI o endpoints que generen scaffolds (React + Node) y desplieguen a Replit/GitHub.
+
+Acciones: plantillas, tests, scripts de deploy.
+
+Fase 7 Agente autónomo y UX
+
+Entregable: flujo de agente que ejecuta tareas tras confirmación, panel de control básico (web) y logs.
+
+Acciones: UI mínima para aprobar acciones, auditoría y rollback.
+
+Estructura de archivos sugerida
+Raíz del repo
+
+bot.js (entry)
+
+package.json
+
+README.md
+
+CHANGELOG.md
+
+.env.example
+
+Carpetas
+
+src/
+
+core/ (orquestador, scheduler)
+
+modules/voice.js
+
+modules/web.js
+
+modules/memory.js
+
+modules/integrations/canva.js
+
+modules/integrations/whatsapp.js
+
+modules/generator.js (scaffolding)
+
+utils/logger.js
+
+tests/
+
+scripts/ (start, test, deploy)
+
+Mensajes exactos para el Agent y ejemplos de commits
+Primer mensaje al Agent (ya lo tienes: PROMPT SUPREMO 2.0).
+Mensaje para pedir Fase 1:
+
+Empieza por la Fase 1: prepara entorno, env.example, instala dependencias, configura secrets y añade tests básicos. Antes de tocar archivos, dime qué vas a crear y en qué rutas.
+
+Ejemplos de commits
+
+chore: setup project skeleton and env.example
+
+feat(memory): add memory module with sqlite support
+
+feat(voice): add stt wrapper and audio endpoint
+
+feat(integrations): add canva adapter (token-based)
+
+test: add basic unit tests for memory module
+
+ci: add workflow for tests and lint
+
+Cómo conectar APIs y mantener control
+Principios
+
+Usa tokens que tú generes y guardes en el secrets manager de Replit o GitHub Actions Secrets.
+
+Nunca hardcodees credenciales.
+
+Todas las acciones que impliquen cambios en cuentas externas deben requerir un comando de confirmación tuya (ejemplo: !confirm canva create design <id>).
+
+Canva
+
+Si Canva tiene API pública: crea una app en Canva, genera token, guarda en CANVA_API_KEY en secrets. El módulo integrations/canva.js usará ese token para crear diseños.
+
+WhatsApp
+
+Usa WhatsApp Business API o proveedores oficiales (Twilio, Meta Business). Registra un número Business, guarda credenciales en secrets, configura webhook para recibir mensajes y endpoints para enviar mensajes.
+
+Despliegue y control
+
+Añade un panel web mínimo (/admin) protegido por auth para aprobar acciones del agente y ver logs.
+
+Mantén un audit log en logs/ con cada acción del agente y la confirmación del usuario.
+
+Pruebas, despliegue y checklist final
+Pruebas
+
+Unit tests para memoria y voice.
+
+E2E básico: enviar audio a bot → transcribe → guardar memoria → respuesta.
+
+Despliegue
+
+Replit: configura secrets y variables de entorno, activa el Agent para que haga commits.
+
+GitHub: workflows para test y deploy; usar gh-pages o Replit/GCP/AWS según prefieras.
+
+Checklist antes de marcar como “PRO”
+
+[ ] env.example completo
+
+[ ] Secrets configurados en entorno seguro
+
+[ ] Módulo memory con tests
+
+[ ] Módulo voice funcional con STT
+
+[ ] Módulo web para lectura segura
+
+[ ] Integraciones con Canva y WhatsApp preparadas (tokens listos)
+
+[ ] Panel de control para aprobar acciones del agente
+
+[ ] Changelog y documentación de uso
